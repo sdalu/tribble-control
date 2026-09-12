@@ -1,0 +1,1422 @@
+#!/usr/bin/env ruby
+#
+# tribe-control -- power, flash and monitor the devices plugged into an
+# ExSYS 16-port managed USB hub.
+#
+#     ./tribe-control -D devlist.conf flash zephyr.hex A1 A3
+#     ./tribe-control -D devlist.conf connect --off C2 B2 | tee twr.log
+#
+# Ports 13 to 16 feed Raspberry Pis and must stay powered.  tribe-control
+# refuses to switch off any port the devlist does not declare; -F/--force
+# lifts that rule.
+#
+# Full documentation -- port map, device selection, recipes and traps --
+# is at the end of this file, after __END__.
+#
+
+require 'bundler/setup'
+require 'optparse'
+require 'shellwords'
+require 'forwardable'
+require 'open3'
+require 'exsys'
+require 'exsys/managed-usb'
+require 'ucl'
+require 'tty/logger'
+require 'parallel'
+
+
+# Serialise access to the hub's control line.
+#
+# The 16 ports are switched over a single FT232, so two tribe-control
+# processes touching it at once both die with ExSYS::ManagedUSB::Error.
+# That is easy to hit the moment anything drives several boards at once
+# -- an orchestrator starting a board per process, or simply two people
+# at the bench -- and the failure gives no hint of the cause.
+#
+# Every call is taken under an exclusive lock instead, so concurrent
+# users queue for the line rather than corrupting each other. The lock
+# is held for one call, which is the granularity the hub itself has:
+# each command is a complete request/response exchange.
+class SerialisedHub
+    LOCKFILE = '/tmp/tribe-control.hub.lock'.freeze
+
+    def initialize(hub)
+        @hub = hub
+    end
+
+    def method_missing(name, ...)
+        return super unless @hub.respond_to?(name)
+
+        File.open(LOCKFILE, File::CREAT | File::RDWR, 0o600) do |f|
+            f.flock(File::LOCK_EX)
+            @hub.public_send(name, ...)
+        end
+    end
+
+    def respond_to_missing?(name, include_private = false)
+        @hub.respond_to?(name, include_private) || super
+    end
+end
+
+######################################################################
+
+#
+# Sysctl quick parsing
+#
+module Platform
+module FreeBSD
+    def self.exsys_ctrl
+        self.sysctl('dev.uftdi').select {|k, v|
+            v.dig(:'%pnpinfo') in { vendor: "0x0403", product: "0x6001" }
+        }.map { |k, dev| '/dev/tty' + dev.dig(:ttyname) }
+    end
+
+    def self.nrf52mdk_mapping
+        self.sysctl('dev.umodem').select {|k, v|
+            v.dig(:'%pnpinfo') in { vendor: "0x0d28", product: "0x0204" }
+        }.to_h {|k, dev|
+            [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev.dig(:ttyname) ] 
+        }
+    end
+
+    # Defined on the module, not as an instance method: every caller is
+    # a def self. above, so an instance method was unreachable and hub
+    # auto-detection died with NoMethodError before reading a single
+    # sysctl. private_class_method keeps it internal, which is what the
+    # bare private was reaching for and could not express.
+    private_class_method def self.sysctl(key)
+        `/sbin/sysctl -e -a #{key}`.lines.map(&:chomp).reduce({}) {|acc, l|
+            k, v  = l.split('=', 2)
+            i, sk = k.split('.')[2..]
+            next acc if sk.nil?
+            if [ '%pnpinfo', '%location' ].include?(sk)
+                v = Shellwords.shellsplit(v).to_h {|e| e.split('=', 2) }
+                              .transform_keys(&:to_sym)
+            end
+                
+            acc.merge(Integer(i) => {sk.to_sym => v}) {|k,o,n| o.merge(n) }
+        }
+    end
+end
+
+
+module Linux
+    def self.exsys_ctrl
+        Dir['/sys/class/tty/ttyUSB*']
+            .map    {|path| self.udevadm_query(path) }
+            .select {|dev| dev in {ID_VENDOR_ID: '0403', ID_MODEL_ID: '6001'} }
+            .map    {|dev| dev[:DEVNAME] }
+    end
+
+    def self.nrf52mdk_mapping
+        Dir['/sys/class/tty/ttyACM*']
+            .map    {|path| self.udevadm_query(path) }
+            .select {|dev| dev in {ID_VENDOR_ID: '0d28', ID_MODEL_ID: '0204'} }
+            .to_h   {|dev| [ dev[:ID_SERIAL_SHORT], dev[:DEVNAME] ] }
+    end
+
+    def self.port_to_usb(port, root:)
+        # USB ExSYS hub path
+        case root
+        when %r{^/dev/(\w+)}
+            tty = $1
+            unless self.udevadm_query(root)[:DEVPATH]
+                       .split(File::SEPARATOR) in [ *, root, _, _, _, ^tty, 'tty', ^tty]
+                raise Error, "unable to identify USB path for #{root}"
+            end
+        when %r{^\d+-\d+(?:\.\d+)*$} # USB path root
+        else raise Error, "unhandled USB root (#{root})"
+        end
+
+        # ExSYS USB hub is a 4x4 ports
+        port_i = (port-1) / 4 + 1
+        port_j = (port-1) % 4 + 1
+        
+        # Path
+        "#{root}.#{port_i}.#{port_j}"
+    end
+    
+    def self.usb_to_tty(path)
+        raise ArgumentError if path.nil?
+        if dev_path = Dir["/sys/bus/usb/devices/#{path}/**/tty/ttyACM*"]&.first
+            File.join('/dev', File.basename(dev_path))
+        end
+    end
+    
+    # private on its own does nothing here: this module has no instance
+    # methods, and it never applied to a def self. singleton method.
+    # udevadm_query was public for as long as it has existed.
+    private_class_method def self.udevadm_query(path)
+        `/usr/bin/udevadm info -q property --export #{Shellwords.escape(path)}`
+          .lines.to_h {|l| l.split('=', 2) }
+          .transform_keys(&:to_sym)
+          .transform_values {|v| Shellwords.split(v).join(' ') }
+    end
+end
+
+
+Current = case RbConfig::CONFIG['host_os']
+          when /^linux-/  then Platform::Linux
+          when /^freebsd/ then Platform::FreeBSD
+          else raise 'Unsupported platform'
+          end
+
+
+def self.exsys_ctrl(...)       = Current.exsys_ctrl(...)
+def self.nrf52mdk_mapping(...) = Current.nrf52mdk_mapping(...)
+def self.port_to_usb(...)      = Current.port_to_usb(...)
+def self.usb_to_tty(...)       = Current.usb_to_tty(...)
+
+end
+
+
+
+
+
+######################################################################
+
+class CLI
+    # Command line error reporting 
+    class Error < StandardError
+    end
+
+    # Command class inheritance
+    class Command
+        extend Forwardable
+        def_delegators :@cli, :exsys, :tty, :conf, :openocd, :each_device,
+                              :port_list, :switchable, :offable, :devices
+
+        # Derive command name from class
+        def self.cmdname
+            if self.const_defined?(:NAME)
+                self::NAME
+            else
+                self.name.split('::')[-1]
+                    .gsub(/([A-Z]+)([A-Z][a-z])/, '\1-\2')
+                    .gsub(/([a-z\d])([A-Z])/,     '\1-\2')
+                    .downcase
+            end
+        end
+
+        # Initializer
+        def initialize(cli)
+            @cli  = cli
+        end
+    end
+
+    # devlist key listing ports that must never be powered down
+    RESERVED_KEY   = 'reserved'
+
+    # devlist key deciding the fate of ports the file does not mention
+    UNDECLARED_KEY = 'undeclared'
+    UNDECLARED     = [ :protect, :switch ].freeze
+
+    # Parser
+    Defaults     = { :'warm-up' => 5,
+                     :openocd   => '/usr/bin/openocd' }
+    GlobalParser = OptionParser.new do |opts|
+        opts.banner = "Usage: #{opts.program_name} ACTION"
+        
+        opts.separator ''
+        opts.separator 'Global options:'
+        
+        opts.on '-d', '--device=DEV',      'Serial line to USB hub'
+        opts.on '-p', '--password=STRING', 'USB hub password'
+        opts.on '-D', '--devlist=FILE',    'Device list file'
+        opts.on '-m', '--method=TYPE', [ 'power', 'usb', 'serial' ],
+                'Device selection method',
+                '  Available: power, usb, serial'
+        opts.on '-W', '--warm-up=SECONDS', Integer,
+                'Warm-up delay after power on'
+        opts.on       '--openocd=PATH',    'openocd path'
+        opts.on '-F', '--force',           'Switch undeclared ports too'
+        opts.on       '--debug[=FILE]',    'Debug output file'
+        opts.on '-v', '--[no-]verbose',    'Run verbosely'
+        opts.on '-V', '--version',         'Version' do
+            puts "ExSYS library : #{ExSYS::VERSION}"
+            exit
+        end
+
+
+        # Options
+        opts.separator ''
+        opts.separator 'Informative options:'
+        opts.on '-h', '--help',         "Show this message" do
+            puts opts
+            puts ''
+            puts 'Commands:'
+            CLI.commands.each { |name, klass|
+                puts '    %-12s %s' % [ klass.cmdname, klass::DESCRIPTION ]
+            }
+            puts ''
+            puts "See '#{opts.program_name} CMD --help'"                \
+                 " for more information on a specific command"
+            puts ''
+            exit
+        end
+    end
+
+    PROGNAME = GlobalParser.program_name
+
+    # Command list
+    def self.commands
+        CLI::Command.subclasses.to_h {|k| [ k.cmdname, k ] }
+    end
+
+    # Find the command class corresponding to the name.
+    def self.find_command_class(name)
+        self.commands.find {|n,k| n == name }&.last
+    end
+
+    # Run the command line
+    #
+    # Commands that report per-device success (flash, reset, serial)
+    # return false if any device failed; that becomes exit status 1.
+    def self.run(argv = ARGV)
+        self.new.parse(argv).run.tap {|ok| exit 1 if ok == false }
+    rescue OptionParser::InvalidArgument, CLI::Error => e
+        warn "#{PROGNAME}: #{e}"
+        exit 1
+    end
+
+    # Attribut reader
+    attr_reader :exsys
+    attr_reader :tty
+    attr_reader :conf
+
+    # Initializer
+    def initialize
+        @devlist    = nil
+        @reserved   = []
+        @undeclared = :protect
+        @tty     = TTY::Logger.new do |config|
+            config.level = :debug
+        end
+    end
+
+    # Translate a port/name to a port identier
+    def name_port(id)
+        case id
+        when /^\d+$/
+            port = Integer(id)
+            if name = @devlist.find {|k,v| v.dig('port') == port }&.first
+                [ name, port ]
+            end
+        else
+            name = id
+            if port = @devlist.find {|k,v| k == id }&.last&.dig('port')
+                [ name, port ]
+            end
+        end.tap do |v|
+            raise KeyError, "id not found (#{id}:#{id.class})" if v.nil?
+        end
+    end
+
+    # Translate a port/name to a device serial number
+    def serial(id)
+        return nil if @devlist.nil?
+        case id
+        when Integer
+            @devlist.find {|k,v| v.dig('port') == id }&.last&.dig('serial')
+        when String
+            @devlist.find {|k,v| k == id }&.last&.dig('serial')
+        else raise "unsupported id (#{id})"
+        end        
+    end
+
+    # List of registered devices
+    def devices
+        @devlist&.keys || []
+    end
+
+    # Translate a list of ids (port numbers or device names) to ports
+    def port_list(ids)
+        ids.map {|id|
+            port = case id
+                   when /^\d+$/ then Integer(id)
+                   else
+                       if @devlist.nil?
+                           raise Error, "device name '#{id}' needs a devlist"
+                       end
+                       self.name_port(id).last
+                   end
+            unless ExSYS::ManagedUSB::PORTS.include?(port)
+                raise Error, "port out of range (#{port})"
+            end
+            port
+        }
+    end
+
+    # Ports tribe-control may power down.  Ports the devlist does not
+    # mention are protected unless 'undeclared' says otherwise, and ports
+    # named by 'reserved' are protected either way.  That is what keeps
+    # the Raspberry Pi power feeds out of reach.
+    def switchable
+        if @devlist.nil?
+            raise Error, 'no devlist: refusing to power down any port' \
+                         ' (use -D FILE, or --force)'
+        end
+        base = case @undeclared
+               when :protect then self.devices.map {|n| name_port(n).last }
+               when :switch  then ExSYS::ManagedUSB::PORTS.to_a
+               end
+        (base - @reserved).tap {|l|
+            raise Error, 'devlist leaves no switchable port' if l.empty?
+        }
+    end
+
+    # Vet a set of ports about to be powered down.  An empty list means
+    # "every port we are allowed to touch", never "all 16".
+    def offable(ports = [], force: false)
+        if force
+            return ports.empty? ? ExSYS::ManagedUSB::PORTS : ports
+        end
+        allowed = self.switchable
+        return allowed if ports.empty?
+        if (bad = ports - allowed).any?
+            raise Error, "refusing to power down port(s) #{bad.join(' ')}:" \
+                         ' not switchable, being undeclared or reserved' \
+                         ' (use --force)'
+        end
+        ports
+    end
+
+    def each_device(ids, &block)
+        return to_enum(:each_device, ids) unless block
+        
+        unless @opts.include?(:devlist)
+            raise Error, "devlist is required"
+        end
+
+        name_port_list = (ids.empty? ? self.devices : ids)
+                           .to_h {|id| self.name_port(id) }
+        @tty&.info "Devices : #{name_port_list.keys.join(' ')}"
+
+        case @opts[:method]
+        when 'serial'
+          unless name_port_list.all? {|n,p| self.serial(p) }
+            raise 'Device without serial' \
+                  ' (select another method)'
+          end
+
+          @tty&.info 'Ensuring ports are powered up'
+          @exsys.on(*name_port_list.values)
+          sleep(@opts[:'warm-up'])
+          
+          @tty&.info "Parallelizing jobs"
+          Parallel.map(name_port_list.keys) do |name|
+              block.call(name, serial: self.serial(name))
+          end
+          
+        when 'usb'
+          @tty&.info 'Ensuring ports are powered up'
+
+          # @exsys.on(*name_port_list.values)
+          name_port_list.values.each do |port|
+             @exsys.on(port)
+          end
+          sleep(@opts[:'warm-up'])
+
+          name_port_list.map do |name, port|
+            usb = Platform.port_to_usb(port, root: @opts[:device])
+            block.call(name, usb: usb)
+          end
+          
+        when 'power'
+          off_ports = self.offable(force: @opts[:force])
+
+          if @tty
+            @tty.warn "Ports #{off_ports.join(' ')} will be turned off" \
+                      ' (hit Ctrl-C to abort)'
+            sleep(5)
+          end
+
+          @tty&.info "Turning off ports: #{off_ports.join(' ')}"
+          @exsys.off(*off_ports)
+          sleep(1)
+          
+          name_port_list.map do |name, port|
+            @tty&.info "Selectively turning on device #{name}"
+            @exsys.on(port) 
+            sleep(@opts[:'warm-up'])
+            block.call(name)
+          ensure
+            @exsys.off(port)
+          end
+          
+        else raise 'unsupported flashing method'
+        end
+    end
+    
+    def openocd(*commands, usb: nil, serial: nil, &block)
+      cmd  = [ @opts[:openocd] ]
+      cmd += [ '-c', 'set WORKAREASIZE 0x4000'               ]
+      cmd += [ '-c', 'source [find interface/cmsis-dap.cfg]' ]
+      cmd += [ '-c', 'transport select swd'                  ]
+      cmd += [ '-c', 'source [find target/nrf52.cfg]'        ]
+      cmd += [ '-c', "adapter usb location #{usb}"           ] if usb
+      cmd += [ '-c', "adapter serial #{serial}"              ] if serial
+      cmd += commands.flat_map {|c| [ '-c', c ] }
+      cmd += [ '-c', 'shutdown'                              ]
+      
+      @tty&.debug Shellwords.shelljoin(cmd)
+      
+      output, pstatus = Open3.capture2e(*cmd)
+      ok              = pstatus.exitstatus.zero?
+      
+      block.call(ok, output) if block
+      ok
+    end          
+
+        # Argument parsing
+    def parse(argv)
+        # Parsed option holder
+        opts = { }.merge(Defaults)
+        
+        # Parse global options
+        GlobalParser.order!(argv, into: opts)
+
+        # Check for command processor class
+        cmdname = argv.shift
+        raise Error, "command missing" if cmdname.nil?
+        cmdk    = CLI.find_command_class(cmdname)
+        raise Error, "command \'#{cmdname}\' is not recognized" if cmdk.nil?
+
+        # Parse command, and run it
+        if cmdk.const_defined?(:Defaults)
+            opts.merge!(cmdk::Defaults) {|k, o, n| o }
+        end
+        if cmdk.const_defined?(:Parser)
+            cmdk::Parser.order!(argv, into: opts)
+        end
+
+        if cmdk.const_defined?(:Methods)
+            if opts.include?(:method)
+                unless cmdk::Methods.include?(opts[:method])
+                    raise "#{cmdname} only support the #{cmdk::Methods.join(', ')} selection"
+                end
+            else
+                opts[:method] = cmdk::Methods.first
+            end
+        end
+        
+        
+        # ExSYS USB hub
+        if ! opts.include?(:device)
+            unless opts[:device] = Platform.exsys_ctrl.first
+                raise Error, "Unable to auto-detect ExSYS hub device"
+            end
+        end
+
+        # Config
+        if opts.include?(:devlist)
+            file = opts[:devlist]
+            raise Error, "file #{file} doesn't exist" unless File.exist?(file)
+            raw       = UCL.load_file(file)
+            @reserved = Array(raw[RESERVED_KEY]).map {|p| Integer(p) }
+
+            if raw.include?(UNDECLARED_KEY)
+                @undeclared = raw[UNDECLARED_KEY].to_s.downcase.to_sym
+                unless UNDECLARED.include?(@undeclared)
+                    raise Error, "#{UNDECLARED_KEY} must be one of" \
+                                 " #{UNDECLARED.join(', ')}"
+                end
+            end
+
+            @devlist  = raw.reject {|k,_|
+                [ RESERVED_KEY, UNDECLARED_KEY ].include?(k)
+            }
+        end
+
+        
+        # Instanciate USB hub control
+        @exsys = SerialisedHub.new(
+            ExSYS::ManagedUSB.new(opts[:device], opts[:password]))
+
+        # Debug
+        if opts.include?(:debug)
+            @tty.configure do |config|
+                config.level = :debug
+            end
+        end
+        
+        # Save parsing results
+        @argv = argv
+        @opts = opts
+        @cmdk = cmdk
+        
+        # Chainable
+        self
+    end
+    
+    # Run command line
+    def run
+        return nil if @cmdk.nil?
+
+        # Only commands that select devices power anything on, so only
+        # they have a selection method and a warm-up delay to report.
+        if @cmdk.const_defined?(:Methods)
+            tty&.info "Device selection using #{@opts[:method]}"
+            tty&.info "A #{@opts[:'warm-up']} sec warm-up delay" \
+                      " will be applied after device power-on"
+        end
+
+        @cmdk::new(self).run(@argv, **@opts)
+    end
+    
+end
+
+
+######################################################################
+
+class CLI
+class USB < CLI::Command
+    DESCRIPTION = 'USB hub control'
+
+    Defaults = { :default => nil }
+    Parser   = OptionParser.new do |opts|
+        # Usage
+        opts.banner = "Usage: #{PROGNAME} usb [options]" \
+                      " status|on|off|toggle|set [PORTS...]"
+
+        # Description
+        opts.separator ''
+        opts.separator "#{DESCRIPTION}."
+        opts.separator ''
+
+        # Options
+        opts.separator 'Options:'
+        opts.on '-D', '--default=BOOLEAN', TrueClass,
+                      'Default state if not specified'
+    end
+
+    def run(argv, **opts)
+        force = opts[:force]
+
+        case action = argv.shift
+        when 'status'
+            # Read-only: asks the hub for its port mask and prints it
+            # next to the devlist, so you can see what is on and what
+            # tribe-control is allowed to switch before you switch it.
+            state = exsys.get(:ports)
+            named = devices.to_h {|n| [ port_list([ n ]).first, n ] }
+            safe  = begin
+                        switchable
+                    rescue Error
+                        []
+                    end
+            state.each do |port, on|
+                puts '%2d  %-6s %-3s %s' % [
+                    port, named[port] || '-', on ? 'on' : 'off',
+                    safe.include?(port) ? '' : '(protected)' ]
+            end
+        when 'on'
+            # Powering up is always safe: no guard.
+            ports = port_list(argv)
+            if ports.empty?
+            then tty&.info "Turning on all ports"
+                 exsys.on
+            else tty&.info "Turning on ports: #{ports.join(' ')}"
+                 exsys.on(*ports)
+            end
+        when 'off'
+            ports = offable(port_list(argv), force: force)
+            tty&.info "Turning off ports: #{ports.join(' ')}"
+            exsys.off(*ports)
+        when 'toggle'
+            # Toggle can power a port down, so it is guarded like 'off'.
+            ports = offable(port_list(argv), force: force)
+            tty&.info "Toggling ports: #{ports.join(' ')}"
+            exsys.toggle(*ports)
+        when 'set'
+            tl = ExSYS::ManagedUSB::TRUE_LIST
+            fl = ExSYS::ManagedUSB::FALSE_LIST
+            t  = tl.to_h {|e| [ e.to_s, e ]}
+            f  = fl.to_h {|e| [ e.to_s, e ]}
+            tf = t.merge(f) { raise "true/false conflict (internal error)" }
+            r  = tf.keys.map {|e| Regexp.escape(e)}
+            a = argv.to_h {|e|
+                unless e =~ /^([^:]+):(#{r.join('|')})$/
+                    raise Error, "invalid argument (#{e})"
+                end
+                [ port_list([$1]).first, tl.include?(tf[$2]) ? :on : :off ]
+            }
+
+            # Vet the ports being powered down.
+            offable(a.select {|_,s| s == :off }.keys, force: force)
+
+            # A false default would sweep every unnamed port off, the
+            # reserved ones included.  Expand it over the switchable
+            # ports instead, and leave the rest as they are.
+            default = opts[:default]
+            if (default == false) && !force
+                (switchable - a.keys).each {|p| a[p] = :off }
+                default = nil
+            end
+
+            tty&.info "Applying port configuration:" \
+                      " #{a.map { _1.join(':') }.join(' ')}" \
+                      " (default=#{default&.to_s || 'current'})"
+            exsys.set(a, default)
+        when nil   then raise Error, 'usb: action missing'
+        else            raise Error, "usb: unknown action (#{action})"
+        end
+    end
+end
+end
+
+
+class CLI
+class Serial < CLI::Command
+    DESCRIPTION = 'Serial device'
+
+    Methods  = [ 'power' ]
+    Defaults = { }
+    Parser   = OptionParser.new do |opts|
+        # Usage
+        opts.banner = "Usage: #{PROGNAME} serial [options] [PORT|DEVNAME]..."
+
+        # Description
+        opts.separator ''
+        opts.separator "#{DESCRIPTION}."
+        opts.separator ''
+    end
+
+    def get_serial(serial: nil, usb: nil, &block)
+        openocd('init', 'targets', usb: usb, serial: serial) do |ok, output|
+          if ok == false
+            return false
+          elsif line = output.lines.select {|l|
+                         l.start_with?('Info : CMSIS-DAP: Serial# =') }.first
+              return line.split('=', 2).last.strip
+          else
+              return nil
+           end
+        end
+    end
+    
+    def run(argv, **opts)
+      each_device(argv).map do |name, hopts={}|
+            case serial = get_serial(**hopts)
+            when String then tty&.success "Serial for #{name}: #{serial}"
+            when nil    then tty&.warn    "No serial for #{name}"
+            else             tty&.error   "Accessing #{name} failed"
+            end
+            serial.is_a?(String)
+        end.all?(&:itself)
+    end
+end
+end
+
+
+
+class CLI
+class Flash < CLI::Command
+    DESCRIPTION = 'Flash devices'
+
+    Methods  = [ 'power', 'serial' ]
+    Defaults = { }
+    Parser   = OptionParser.new do |opts|
+        # Usage
+        opts.banner = "Usage: #{PROGNAME} flash [options] FIRMWARE [PORT|DEVNAME]..."
+
+        # Description
+        opts.separator ''
+        opts.separator "#{DESCRIPTION}."
+        opts.separator ''
+    end
+
+    def flash(firmware, usb: nil, serial: nil, &block)
+        openocd('init', 'targets', 'reset init',
+                "flash write_image erase #{firmware}",
+                'reset run', usb: usb, serial: serial)
+    end
+    
+    def run(argv, **opts)
+        firmware = argv.shift
+        tty&.info "Firmware: #{firmware}"
+
+        each_device(argv).map do |name, hopts={}|
+            flash(firmware, **hopts).tap do |ok|
+                if ok 
+                then tty&.success "Device #{name}: Flashed"
+                else tty&.error   "Device #{name}: Flashed failed"
+                end
+            end
+        end.all?(&:itself)
+    end
+end
+end
+
+
+class CLI
+class Reset < CLI::Command
+    DESCRIPTION = 'reset devices'
+
+    Methods  = [ 'serial' ]
+    Defaults = { }
+    Parser   = OptionParser.new do |opts|
+        # Usage
+        opts.banner = "Usage: #{PROGNAME} reset [options] [PORT|DEVNAME]..."
+
+        # Description
+        opts.separator ''
+        opts.separator "#{DESCRIPTION}."
+        opts.separator ''
+    end
+
+    def reset(usb: nil, serial: nil, &block)
+        openocd('init', 'targets', 'reset run', usb: usb, serial: serial)
+    end
+    
+    def run(argv, **opts)
+        each_device(argv).map do |name, hopts={}|
+            reset(**hopts).tap do |ok|
+                if ok 
+                then tty&.success "Device #{name}: Reseted"
+                else tty&.error   "Device #{name}: Reset failed"
+                end
+            end
+        end.all?(&:itself)
+    end
+end
+end
+
+
+
+class CLI
+class Connect < CLI::Command
+    DESCRIPTION = 'Connect to device'
+
+    Methods  = [ 'usb' ]
+    Defaults = { }
+    Parser   = OptionParser.new do |opts|
+        # Usage
+        opts.banner = "Usage: #{PROGNAME} connect [options] PORT"
+
+        # Description
+        opts.separator ''
+        opts.separator "#{DESCRIPTION}."
+        opts.separator ''
+
+        # Options
+        opts.separator 'Options:'
+        opts.on '--off', 'Start with all devices off'
+        opts.on '--reset', 'Reset each board once its console is open,' \
+                           ' so boot output is captured'
+        opts.on '--duration=SECONDS', Integer,
+                'How long to capture for (default 600)'
+        opts.on '--command=CMD', 'Shell command to send to every selected' \
+                                 ' board once it is up (eg. spank syslog info)'
+        
+    end
+
+    def run(argv, **opts)
+        if opts[:off]
+            off_ports = offable(force: opts[:force])
+            tty&.info "Starting from off state: #{off_ports.join(' ')}"
+            exsys.off(*off_ports)
+        end
+      
+        connected = []
+        threads = each_device(argv).map do |name, hopts={}|
+          dev_tty = Platform.usb_to_tty(hopts[:usb])
+          tty&.info "Connecting to #{name} on #{dev_tty}"
+          connected << [ name, hopts ]
+            ok, mismatch, inversion, not_defined = 0, 0, 0, 0
+            Thread.new do
+                UART.open dev_tty, 230400 do |serial|
+                    loop do
+                      line = serial.readline
+                      case line
+                      when /TX and round mismatch/ then mismatch    += 1
+                      # spank's report path (spank report ...), which is
+                      # written straight out by the port and so survives a
+                      # firmware whose syslog is compiled at warning -- the
+                      # cheap way to read a bench out.  A distance reported
+                      # here is a successful exchange, same as an ok below.
+                      when /Distance = /           then ok          += 1
+                      when /SDS TWR/
+                        case line
+                        when /not fully defined/   then not_defined += 1
+                        when /inversion/           then inversion   += 1
+                        else                            ok          += 1
+                        end
+                      end
+                      puts "<#{name}> #{line}"
+                    rescue EOFError
+                        retry
+                    end
+                end
+            ensure
+              success_rate = (100.0 * ok / (ok + inversion + not_defined)).round(2)
+              puts "<#{name}> SUMMARY: ok=#{ok} / inversion=#{inversion} / not-defined=#{not_defined} / mismatch=#{mismatch} tx-rate=#{success_rate}"
+            end
+        end
+
+        # A board that is already running has usually said everything it
+        # had to say before its console was opened: the banner and the
+        # driver's init lines are long gone.  Resetting once the readers
+        # are attached is the only way to see them.
+        if opts[:reset]
+            sleep(1)                    # let the reader threads settle
+            connected.each do |name, hopts|
+                tty&.info "Resetting #{name}"
+                unless openocd('init', 'reset run', **hopts)
+                    tty&.error "Device #{name}: Reset failed"
+                end
+            end
+        end
+
+        # The interesting output is often below the firmware's compiled-in
+        # log level, and spank can be turned up at run time -- but only by
+        # someone who can type at the shell, which until now nothing here
+        # could do.  Written on a second, write-only handle: the reader
+        # thread already holds the port, and sharing one IO across threads
+        # for opposite directions is a race waiting for a long bench run.
+        if cmd = opts[:command]
+            sleep(opts[:reset] ? 2 : 0.5)   # let the shell come up
+            connected.each do |name, hopts|
+                dev_tty = Platform.usb_to_tty(hopts[:usb])
+                tty&.info "Sending to #{name}: #{cmd}"
+                begin
+                    File.open(dev_tty, File::WRONLY | File::NOCTTY) do |w|
+                        w.sync = true
+                        w.write("\r#{cmd}\r")
+                    end
+                rescue SystemCallError => e
+                    tty&.error "Device #{name}: could not send command" \
+                               " (#{e.message})"
+                end
+            end
+        end
+
+        sleep(opts[:duration] || 600)
+    end
+end
+end
+
+
+begin
+    CLI.run
+rescue => e
+    $stderr.puts "#{CLI::PROGNAME}: #{e.message || 'unknown'}"
+    $stderr.puts e.backtrace if $DEBUG
+    exit 1
+end
+
+
+__END__
+
+==============================================================================
+                                tribe-control
+==============================================================================
+
+Power, flash and monitor the devices plugged into an ExSYS 16-port managed
+USB hub.
+
+The hub switches VBUS on each port independently, driven over an FT232
+serial line.  tribe-control drives that line.  For the nRF52-MDK boards on
+the bench it additionally speaks SWD to them through openocd/CMSIS-DAP and
+reads their console over USB CDC.  Everything else on the hub is only an
+electrical load -- see PROTECTED PORTS.
+
+    ./tribe-control -D devlist.conf flash zephyr.hex A1 A3
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off C2 B2 \
+        | tee twr.log
+
+It lives in /root on the bench Pi, alongside devlist.conf and the Gemfile.
+Run it from there: it requires bundler/setup at startup and so needs the
+Gemfile and the vendored bundle under ./vendor in the working directory.
+
+
+THE BENCH
+------------------------------------------------------------------------------
+
+  this host (raspberrypi)
+        │
+        │  FT232R ──▸ /dev/ttyUSB0        the hub's control line.  It is
+        │             9600 8N1            internal to the hub: it is NOT
+        ▾                                 one of the 16 switched sockets.
+  ┌───────────────────────────────────────────────────────────────────┐
+  │                   ExSYS 16-port managed USB hub                   │
+  │                                                                   │
+  │    bank 1          bank 2          bank 3          bank 4         │
+  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
+  │  │  1  C2   │    │  5  A1   │    │  9   ·   │    │ 13  RPi  │     │
+  │  │  2  B2   │    │  6  B1   │    │ 10   ·   │    │ 14  RPi  │     │
+  │  │  3  A2   │    │  7   ·   │    │ 11   ·   │    │ 15  RPi  │     │
+  │  │  4  A3   │    │  8   ·   │    │ 12   ·   │    │ 16  RPi  │     │
+  │  └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
+  └───────────────────────────────────────────────────────────────────┘
+      nRF52-MDK boards, declared        power only, nothing talks to
+      in devlist.conf.  SWD over        them.  Never power these down:
+      CMSIS-DAP, console over CDC.      see PROTECTED PORTS below.
+
+Ports are numbered 1 to 16 across four internal banks of four.  These are
+the hub's own numbers, the ones the devlist and every command use; whether
+the sockets are silkscreened that way is another matter, so count banks
+left to right and sockets top to bottom if you are looking for one by hand.
+
+The FT232 control adapter enumerates at the last position of the hub's
+internal tree (USB path 1-1.2.4.4), which makes it look as though it
+occupies port 16.  It does not: it is wired inside the hub and is not
+switched.  Port 16 is an ordinary socket, and on this bench it feeds a
+Raspberry Pi.  The one consequence is that a board must never be put on
+port 16: --method usb would compute the path 1-1.2.4.4 for it and address
+the FT232 instead.
+
+Which of the four Pis sits on which of ports 13 to 16 is not recorded
+anywhere, here or in the devlist.  If you need to reboot one in particular,
+establish that physically first -- the tool cannot tell you, because
+nothing on those ports communicates with the host.
+
+The host is not one of them.  It has its own supply, so no hub port can
+cut power to the machine you are typing on, and --force is safe in that
+one narrow respect.
+
+Requirements: Ruby 3.1 with the bundle vendored under ./vendor, and openocd
+0.12 at /usr/bin/openocd, overridable with --openocd.
+
+
+OPTIONS
+------------------------------------------------------------------------------
+
+Ordering matters, and it is the thing most likely to waste your afternoon.
+Global options come before the command; a command's own options come after
+the command but before its sub-action.  So:
+
+    ./tribe-control -D devlist.conf --force usb off 14      global, then cmd
+    ./tribe-control -D devlist.conf usb --default=false set C2:on
+
+and NOT 'usb set --default=false ...', which parses the flag as an argument
+to 'set' and fails with "invalid argument".
+
+Global:
+
+    -d, --device=DEV        serial line to the hub.  Auto-detected on Linux
+                            by looking for an FTDI 0403:6001; normally
+                            /dev/ttyUSB0.  Pass it explicitly if you have
+                            more than one FTDI adapter attached.
+    -D, --devlist=FILE      the device list.  Required for any power-down
+                            at all, and by any command taking device
+                            names.  'usb on' and 'usb status' work
+                            without it.
+    -m, --method=TYPE       device selection: power, usb or serial.  See
+                            DEVICE SELECTION.  Rejected if the command does
+                            not support it.
+    -W, --warm-up=SECONDS   delay after powering a port on, before touching
+                            the board.  Default 5.
+    -F, --force             switch ports the devlist does not allow.  See
+                            PROTECTED PORTS.
+    -p, --password=STRING   supplies the hub password; it does not change
+                            it.  Default 'pass'.  A wrong one makes the
+                            hub answer E01 and the command abort loudly,
+                            not silently.
+        --openocd=PATH      openocd binary.  Default /usr/bin/openocd.
+        --debug[=FILE]      raise the log level to debug.  The FILE
+                            argument is accepted and ignored.
+    -v, --[no-]verbose      run verbosely.
+    -V, --version           print the ExSYS library version and exit.
+    -h, --help              usage, including the command list.
+
+Per-command: 'usb' takes --default=BOOL, 'connect' takes --off.  Both are
+described under COMMANDS.
+
+HUB PROTOCOL, AND WHAT IT CANNOT TELL YOU
+------------------------------------------------------------------------------
+
+The hub speaks a small ASCII protocol over the FT232 line.  Recovered from
+the vendor's own cusba64 binary (which ships unstripped), the complete
+vocabulary is eight commands, each terminated by CR, answering 'G...' on
+success and 'E01' on error:
+
+    ?Q   query: port count, on mask, off mask, firmware   no password
+    GP   get port states                                  no password
+    SP   set port states                                  password
+    FP   set port states, and save as the power-on state  password
+    WP   save the current states as the power-on state    password
+    CP   change password                                  password
+    RD   restore factory defaults                         password
+    RH   reset the whole hub                              password
+
+The exsys gem implements all of these except ?Q.  The default password is
+'pass', right-padded to 8 characters.
+
+tribe-control only ever issues SP, never FP or WP: port states are set for
+the here and now and never written to the hub's flash, so nothing it does
+survives a hub power cycle.  Note also that RD, the only recovery from a
+forgotten password, drops every port -- so changing the password with CP
+is close to a one-way door on a bench with Pis on it.
+
+There is no per-port current or voltage telemetry, and no way to bolt it
+on: the protocol has no such command, cusba64 contains no such code, and
+USB 2.x/3.x hubs do not report per-port draw to the host under any
+circumstances.  A device's bMaxPower descriptor is what it asks for at
+enumeration, not what it consumes, and the Raspberry Pis never enumerate
+at all.  Measuring consumption needs an inline USB power meter or an
+instrumented bench supply.
+
+Two of these commands are worth fearing.  RH resets the hub and RD
+restores factory defaults; either drops every port, which reboots all four
+Raspberry Pis.  tribe-control never issues them, and the exsys gem only
+does so via #reset and #restore.
+
+DEVLIST
+------------------------------------------------------------------------------
+
+A UCL file mapping a device name to a hub port, and optionally to the
+board's CMSIS-DAP serial number.  It is what -D/--devlist points at, and it
+is the only thing that tells tribe-control which ports it may touch.
+
+    undeclared = protect            # the default; see PROTECTED PORTS
+    reserved   = [ 13, 14, 15, 16 ] # Raspberry Pi power feeds
+
+    C2 { serial = '1026360216055e5b0000...97969902'  port = 1 }
+    B2 {                                             port = 2 }
+    A2 {                                             port = 3 }
+    A3 { serial = '1026360213072dde0000...97969902'  port = 4 }
+    A1 { serial = '102636021605598e0000...97969902'  port = 5 }
+    B1 { serial = '1026360202c4dc0f0000...97969902'  port = 6 }
+
+Indentation is not significant; the serials above are elided in the middle
+for width, the real ones are 48 hex characters and must be pasted whole.
+
+Every key other than 'reserved' and 'undeclared' is a device.  A command
+given no device names operates on all of them.  Names may be used anywhere
+a port number can be, in every command.
+
+A board with no serial= cannot be reached by 'reset' or by --method
+serial, both of which address a board by its serial number: the run
+aborts with "Device without serial".  Fix it by running 'serial' (see
+RECIPES) and pasting the value in.  Every board on this bench has one.
+
+'reserved' lists ports that must never be powered down.  'undeclared' says
+what to do with every port the file does not mention.  Both are described
+under PROTECTED PORTS.
+
+There is no schema and no validation.  A misspelled 'reserverd' becomes a
+device named reserverd and silently unprotects four Raspberry Pis, so
+after editing this file run 'usb status' and read the protected column
+before you trust it.
+
+
+PROTECTED PORTS
+------------------------------------------------------------------------------
+
+Four Raspberry Pis hang off this hub for power only.  Nothing communicates
+with them, so nothing notices if their VBUS disappears -- they simply
+reboot, uncleanly, mid-write.  Two devlist keys keep that from happening.
+
+'undeclared' decides the fate of every port the devlist does not mention:
+
+    undeclared = protect    the default.  Only ports declared in the
+                            devlist may be powered down.
+    undeclared = switch     any of the 16 may be powered down.
+
+'reserved' names ports that are never powered down whichever mode is in
+force, so it protects a port even when that port is a declared device:
+
+    reserved = [ 13, 14, 15, 16 ]
+
+Together:
+
+    tribe-control powers down a port only if the devlist allows it,
+    and never one the devlist reserves.
+
+This is enforced at every path that can cut power, not just the obvious
+one: 'usb off', 'usb toggle', 'usb set' with a port set to off, the
+all-ports-off that begins --method power, and 'connect --off'.  You do not
+have to reason about which commands are dangerous; they all go through the
+same gate.
+
+So a bare 'usb off' means "every switchable port", not "all 16".  Naming a
+protected port is an error, not a silent skip:
+
+    $ ./tribe-control -D devlist.conf usb off 14
+    tribe-control: refusing to power down port(s) 14: not switchable,
+    being undeclared or reserved (use --force)
+
+Without a devlist there is no safe set, so power-down is refused outright.
+
+-F/--force lifts both rules and restores the old "all 16 ports" behaviour.
+It is the only way to deliberately reboot a Pi, and it is a hard VBUS cut,
+not a shutdown: the Pi loses power mid-write, with whatever consequences
+that has for its filesystem.  Shut it down over the network first if you
+care about what is on it.  It cannot strand you, though -- the host runs
+off its own supply, not off the hub.
+
+Powering *on* is never guarded: 'usb on' with no arguments still turns on
+all 16 ports, which is the state the bench should normally sit in.
+
+
+DEVICE SELECTION
+------------------------------------------------------------------------------
+
+Flashing one of six identical boards means telling openocd which one.
+There are three ways, chosen with -m/--method:
+
+  ┌─────────┬─────────────────┬──────────────┬────────────────────────┐
+  │ method  │ addresses a     │ requires     │ power while the job    │
+  │         │ board by        │              │ runs                   │
+  ├─────────┼─────────────────┼──────────────┼────────────────────────┤
+  │ serial  │ its CMSIS-DAP   │ serial= for  │ every declared port    │
+  │         │ serial number   │ every board  │ on; boards in parallel │
+  ├─────────┼─────────────────┼──────────────┼────────────────────────┤
+  │ usb     │ its USB path,   │ Linux (not   │ every declared port    │
+  │         │ root.bank.slot  │ FreeBSD)     │ on; boards in sequence │
+  ├─────────┼─────────────────┼──────────────┼────────────────────────┤
+  │ power   │ being the only  │ nothing      │ exactly one board at   │
+  │         │ board powered   │              │ a time, rest cut       │
+  └─────────┴─────────────────┴──────────────┴────────────────────────┘
+
+Which to use:
+
+    power    the default, and the only one that needs no configuration --
+             it identifies a board by being the only one powered.  Slowest
+             by far: every board costs a power cycle plus the warm-up, so
+             the whole bench is six sequential rounds.  It also leaves
+             every declared board POWERED OFF when it finishes, because
+             each port is switched off again after its turn.  Run
+             'usb on' afterwards to bring the bench back up.
+    serial   use once every board has a serial= in the devlist.  Boards
+             stay powered and are done in parallel, so it is much faster
+             and far less disruptive.  Aborts if any selected board lacks
+             a serial.
+    usb      what 'connect' uses.  Addresses by USB topology, so it needs
+             no serials, but it is Linux-only.
+
+Each command accepts only the methods that make sense for it, and uses the
+first as its default:
+
+    command    methods accepted          default
+    -------    ----------------          -------
+    usb        (none: acts on ports)     n/a
+    serial     power                     power
+    flash      power, serial             power
+    reset      serial                    serial
+    connect    usb                       usb
+
+--method usb derives the board's USB location from the hub's own geometry,
+four banks of four:
+
+      port 5 ─┬─▸ bank 2      bank is (port minus 1) div 4, plus 1
+      (A1)    └─▸ slot 1      slot is (port minus 1) mod 4, plus 1
+
+      hub root path .............  1-1.2
+      openocd adapter usb location 1-1.2.2.1
+                                   └───┘ │ │
+                                     │   │ └── slot
+                                     │   └──── bank
+                                     └──────── hub root
+
+After any power-on, -W/--warm-up seconds (default 5) pass before the boards
+are touched, to let them enumerate.
+
+
+COMMANDS
+------------------------------------------------------------------------------
+
+Every command takes device names or port numbers interchangeably, and
+operates on all declared devices when given neither.
+
+usb  status|on|off|toggle|set  [PORT|DEVNAME]...
+    Drive hub port power directly.  'set' takes PORT:STATE pairs, where
+    STATE is any of on/off/1/0/true/false/t/f.  With no arguments, 'on'
+    means all 16 ports, while 'off' and 'toggle' mean every switchable
+    port (see PROTECTED PORTS).
+    --default=BOOL sets what happens to ports 'set' does not name; it goes
+    before the word 'set'.  Without --force it is applied only to
+    switchable ports, so it cannot sweep a Pi off.
+    'status' is read-only: it asks the hub for its port mask and prints
+    every port with its device name, its state, and whether the devlist
+    lets tribe-control switch it.  Run it before anything involving
+    --force.
+    Note that 'usb on' does not wait out --warm-up; it returns as soon as
+    the hub acknowledges.
+    Selection method: none.  Exit status: 0, or 1 on error.
+
+serial  [PORT|DEVNAME]...
+    Report each board's CMSIS-DAP serial number, by running openocd and
+    reading back "Info : CMSIS-DAP: Serial# =".  Prints one line per
+    board, "Serial for A1: 1026...".  Use it to populate the devlist.
+    Selection method: power only -- identifying a board is precisely what
+    is missing at this point, so it has to be done by elimination.  That
+    means it power-cycles the bench and leaves it off; see DEVICE
+    SELECTION.  Exit status: 1 if any board could not be read.
+
+flash  FIRMWARE [PORT|DEVNAME]...
+    openocd 'flash write_image erase FIRMWARE' then 'reset run', against
+    target/nrf52.cfg over interface/cmsis-dap.cfg with SWD.  FIRMWARE is
+    resolved by openocd relative to the current directory.
+    Every selected board is attempted even if an earlier one failed; the
+    exit status reflects the whole run.
+    Selection methods: power (default), serial.  Exit status: 1 if any
+    board failed.
+
+reset  [PORT|DEVNAME]...
+    openocd 'reset run'.
+    Selection method: serial only, so it cannot address a board that has
+    no serial= in the devlist.  Exit status: 1 if any board failed.
+
+connect  [PORT|DEVNAME]...
+    Open each board's CDC console at 230400 baud and stream it, prefixing
+    every line with <DEVNAME>.  Lines are tallied into four buckets: ok,
+    inversion, not-defined (all three matching "SDS TWR") and mismatch
+    ("TX and round mismatch").  A spank report line ("Distance = ...",
+    see --command) counts as ok too: it is the same successful exchange
+    reported by a cheaper path.  On exit each board prints a SUMMARY line
+    with those counts and a tx-rate percentage.
+    Boards are streamed concurrently, one thread each, which is what
+    makes a two-way-ranging capture meaningful; the "in sequence" in the
+    method table above describes the order boards are set up in, not the
+    monitoring.
+    The buckets are firmware-defined strings, not tribe-control's
+    invention: whatever the board prints is what gets counted, and
+    tx-rate is ok over (ok + inversion + not-defined), so mismatch is
+    deliberately excluded from the denominator.
+    --off powers down every declared board first, for a clean start --
+    every declared board, not only the ones named on the command line --
+    and then powers the selected ones back up.
+    --reset resets each board over SWD once its console is open.  Without
+    it you see only what a board says from the moment the reader attaches,
+    which on an already-running board is nothing at all until the next
+    ranging exchange: the banner and the driver's init lines -- including
+    any "Failed to initialize" -- were printed seconds after power-on and
+    are gone.  Use it whenever you care about why a board is quiet, and
+    note that --off alone does NOT substitute: the port is powered back up
+    before the console is opened, so boot output still escapes.
+    --duration=SECONDS bounds the capture; the default is 600.
+    --command=CMD types CMD at each board's shell once it is up (two
+    seconds after a --reset, half a second otherwise) and is the way to
+    reach anything the firmware gates behind a run-time setting.  The
+    case it exists for: redskin compiles spank's log level to warning,
+    but the ranging results are logged at info, so a capture counts zero
+    exchanges on a bench that is in fact working perfectly --
+
+        --command='spank syslog info'      # the whole info stream
+        --command='spank report all'       # just the distances, cheaper
+
+    turns them on without reflashing.  Prefer the second: the report path
+    is written straight out by the port instead of going through the
+    syslog, so it is not silenced by the compiled-in level and costs the
+    firmware less in a loop that is timing sensitive.  It is sent once, to every selected
+    board, on a separate write handle; the command is not echoed by
+    tribe-control, but the board's own echo and reply appear in the
+    capture like any other output.  Give it once -- repeating the option
+    keeps only the last.
+    ALWAYS run it under 'stdbuf -oL' if you are piping the output
+    anywhere.  Without that, the pipe buffers in 4 KB blocks and 'tee'
+    shows nothing for minutes.
+    Selection method: usb only, so Linux only.  Exit status:
+    0, or 1 on error; nothing about what the boards did.
+
+
+RECIPES
+------------------------------------------------------------------------------
+
+Read the serials of every board, to fill in the devlist.  This cycles the
+bench and leaves it powered off:
+
+    ./tribe-control -D devlist.conf serial
+    ./tribe-control -D devlist.conf usb on
+
+Add a board on a new port.  'serial 7' will not work: an undeclared port
+has no name, and the tool refuses to power ports the devlist never
+mentions.  Declare a stub first, then read the serial and fill it in:
+
+    echo "X1 { port = 7 }" >> devlist.conf
+    ./tribe-control -D devlist.conf serial X1
+
+Flash the whole bench, then just two boards:
+
+    ./tribe-control -D devlist.conf flash zephyr.hex
+    ./tribe-control -D devlist.conf flash zephyr.hex A1 A3
+
+Flash in parallel, leaving the bench powered.  Needs a serial for every
+board named, so fix the gaps first (see DEVLIST):
+
+    ./tribe-control -D devlist.conf --method serial flash zephyr.hex
+
+Run a ranging capture to a log, for ten minutes:
+
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off C2 B2 \
+        | tee twr.log
+
+Find out why a board is silent -- capture its boot, including the driver
+init lines, for one minute:
+
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off --reset \
+        --duration=60 C2 A2 | tee boot.log
+
+Capture ranging results from a stock redskin build.  Without the command
+the log level hides them and the SUMMARY reads ok=0 / tx-rate=NaN:
+
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off --reset \
+        --command='spank syslog info' --duration=60 C2 A2 | tee twr.log
+
+Power-cycle one board without disturbing the others:
+
+    ./tribe-control -D devlist.conf usb off C2 && sleep 2 && \
+    ./tribe-control -D devlist.conf usb on  C2
+
+Deliberately reboot a Raspberry Pi (the only case for --force).  This is a
+hard power cut; shut the Pi down over the network first:
+
+    ./tribe-control -D devlist.conf --force usb off 14 && sleep 2 && \
+    ./tribe-control -D devlist.conf usb on 14
+
+Flash from a script, failing the build if any board failed:
+
+    #!/bin/sh
+    cd /root || exit 1
+    exec ./tribe-control -D devlist.conf flash zephyr.hex
+
+
+TRAPS
+------------------------------------------------------------------------------
+
+Exit status.  Any command exits 1 if it aborts with an error -- a refused
+power-down, an unknown device name, a hub that answers E01.  On top of
+that, flash, reset and serial exit 1 when they ran to completion but some
+board failed; usb and connect report nothing about the work itself, so a
+0 from 'connect' says only that it started.  Beware that piping into
+'tee' hands you tee's status, not tribe-control's -- which is exactly
+what the capture recipe does, so do not use that shape in a script
+without a pipefail or a temporary file.
+
+--method power leaves every declared board powered off when it finishes.
+flash and serial default to it.  Follow them with 'usb on' when you want
+the bench back.
+
+connect stops after 600 seconds unless --duration says otherwise; Ctrl-C
+is the other way out of a shorter run.
+
+A board that emits no "SDS TWR" lines at all makes its SUMMARY report
+tx-rate=NaN, because the rate divides by the sum of three zero counters.
+Before concluding the radio is dead, check that the firmware is actually
+logging them: redskin ships with spank's log level at warning and logs
+distances at info, so a perfectly healthy pair reports ok=0.  See
+--command.
+
+--debug takes an optional FILE which is ignored.  The flag only raises the
+log level to debug; output still goes to the terminal.
+
+FreeBSD is still only half usable, though less so than it was.  Hub
+auto-detection works now -- Platform::FreeBSD.sysctl used to be defined
+as an instance method and called as a module one, so it died with
+NoMethodError before reading a single sysctl -- and exsys_ctrl and
+nrf52mdk_mapping both run, verified on a FreeBSD 15.1 host with no hub
+attached, where they correctly return nothing rather than raising.
+
+What remains Linux-only is port_to_usb and usb_to_tty, which read
+/sys/bus/usb, so --method usb and therefore connect still cannot work
+there.  usb, serial, flash and reset should.
+
+--method usb trusts the 4-by-4 geometry.  A board on port 16 would resolve
+to 1-1.2.4.4, which is where the FT232 control adapter already sits.  The
+bench keeps boards on ports 1 to 6, so this stays theoretical.
+
+The hub password defaults to 'pass' (-p/--password to change it).  It
+guards writes to the hub, not reads.
