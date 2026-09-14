@@ -325,6 +325,29 @@ class CLI
         end        
     end
 
+    # Read an arbitrary key of a device (by port number or name)
+    def attribute(id, key, default = nil)
+        return default if @devlist.nil?
+        entry = case id
+                when Integer then @devlist.find {|k,v| v.dig('port') == id }&.last
+                when String  then @devlist.find {|k,v| k == id }&.last
+                else raise "unsupported id (#{id})"
+                end
+        entry&.dig(key) || default
+    end
+
+    # openocd interface script for a board: cmsis-dap (nRF52-MDK, the
+    # default) or jlink (DWM1001-DEV, J-Link OB)
+    def interface(id)
+        self.attribute(id, 'interface', 'cmsis-dap').to_s
+    end
+
+    # Console baud rate of a board (230400 on the bench's MDK firmware,
+    # 115200 on the stock DWM1001-DEV devicetree)
+    def baud(id)
+        Integer(self.attribute(id, 'baud', 230400))
+    end
+
     # List of registered devices
     def devices
         @devlist&.keys || []
@@ -406,7 +429,8 @@ class CLI
           
           @tty&.info "Parallelizing jobs"
           Parallel.map(name_port_list.keys) do |name|
-              block.call(name, serial: self.serial(name))
+              block.call(name, serial: self.serial(name),
+                               interface: self.interface(name))
           end
           
         when 'usb'
@@ -420,7 +444,7 @@ class CLI
 
           name_port_list.map do |name, port|
             usb = Platform.port_to_usb(port, root: @opts[:device])
-            block.call(name, usb: usb)
+            block.call(name, usb: usb, interface: self.interface(name))
           end
           
         when 'power'
@@ -440,7 +464,7 @@ class CLI
             @tty&.info "Selectively turning on device #{name}"
             @exsys.on(port) 
             sleep(@opts[:'warm-up'])
-            block.call(name)
+            block.call(name, interface: self.interface(name))
           ensure
             @exsys.off(port)
           end
@@ -449,10 +473,10 @@ class CLI
         end
     end
     
-    def openocd(*commands, usb: nil, serial: nil, &block)
+    def openocd(*commands, usb: nil, serial: nil, interface: 'cmsis-dap', &block)
       cmd  = [ @opts[:openocd] ]
       cmd += [ '-c', 'set WORKAREASIZE 0x4000'               ]
-      cmd += [ '-c', 'source [find interface/cmsis-dap.cfg]' ]
+      cmd += [ '-c', "source [find interface/#{interface}.cfg]" ]
       cmd += [ '-c', 'transport select swd'                  ]
       cmd += [ '-c', 'source [find target/nrf52.cfg]'        ]
       cmd += [ '-c', "adapter usb location #{usb}"           ] if usb
@@ -683,13 +707,14 @@ class Serial < CLI::Command
         opts.separator ''
     end
 
-    def get_serial(serial: nil, usb: nil, &block)
-        openocd('init', 'targets', usb: usb, serial: serial) do |ok, output|
+    def get_serial(**hopts, &block)
+        openocd('init', 'targets', **hopts) do |ok, output|
           if ok == false
             return false
           elsif line = output.lines.select {|l|
-                         l.start_with?('Info : CMSIS-DAP: Serial# =') }.first
-              return line.split('=', 2).last.strip
+                         l.start_with?('Info : CMSIS-DAP: Serial# =') ||
+                         l =~ /^Info : J-Link .* S\/N (\d+)/ }.first
+              return line =~ /S\/N (\d+)/ ? $1 : line.split('=', 2).last.strip
           else
               return nil
            end
@@ -727,10 +752,10 @@ class Flash < CLI::Command
         opts.separator ''
     end
 
-    def flash(firmware, usb: nil, serial: nil, &block)
+    def flash(firmware, **hopts, &block)
         openocd('init', 'targets', 'reset init',
                 "flash write_image erase #{firmware}",
-                'reset run', usb: usb, serial: serial)
+                'reset run', **hopts)
     end
     
     def run(argv, **opts)
@@ -766,8 +791,8 @@ class Reset < CLI::Command
         opts.separator ''
     end
 
-    def reset(usb: nil, serial: nil, &block)
-        openocd('init', 'targets', 'reset run', usb: usb, serial: serial)
+    def reset(**hopts, &block)
+        openocd('init', 'targets', 'reset run', **hopts)
     end
     
     def run(argv, **opts)
@@ -826,7 +851,7 @@ class Connect < CLI::Command
           connected << [ name, hopts ]
             ok, mismatch, inversion, not_defined = 0, 0, 0, 0
             Thread.new do
-                UART.open dev_tty, 230400 do |serial|
+                UART.open dev_tty, @cli.baud(name) do |serial|
                     loop do
                       line = serial.readline
                       case line
@@ -1092,6 +1117,20 @@ serial, both of which address a board by its serial number: the run
 aborts with "Device without serial".  Fix it by running 'serial' (see
 RECIPES) and pasting the value in.  Every board on this bench has one.
 
+Two optional keys describe a board that is not an nRF52-MDK (added
+2026-09-14 for D4, a DWM1001-DEV on port 7):
+
+    D4 { serial = '000760040233'  interface = jlink  baud = 115200  port = 7 }
+
+    interface   the openocd interface script, without the .cfg: cmsis-dap
+                (the default, the MDK's DAPLink) or jlink (the DWM1001-DEV's
+                J-Link OB).  Used by flash, reset, serial and connect
+                --reset.  With jlink, serial= is the J-Link serial number
+                as udev reports it; leading zeros are accepted.
+    baud        the console speed 'connect' opens, default 230400 (what the
+                MDK overlay sets).  The stock DWM1001-DEV devicetree runs
+                its console at 115200.
+
 'reserved' lists ports that must never be powered down.  'undeclared' says
 what to do with every port the file does not mention.  Both are described
 under PROTECTED PORTS.
@@ -1239,7 +1278,8 @@ usb  status|on|off|toggle|set  [PORT|DEVNAME]...
 
 serial  [PORT|DEVNAME]...
     Report each board's CMSIS-DAP serial number, by running openocd and
-    reading back "Info : CMSIS-DAP: Serial# =".  Prints one line per
+    reading back "Info : CMSIS-DAP: Serial# =" (or the J-Link S/N line
+    for interface = jlink).  Prints one line per
     board, "Serial for A1: 1026...".  Use it to populate the devlist.
     Selection method: power only -- identifying a board is precisely what
     is missing at this point, so it has to be done by elimination.  That
@@ -1248,7 +1288,8 @@ serial  [PORT|DEVNAME]...
 
 flash  FIRMWARE [PORT|DEVNAME]...
     openocd 'flash write_image erase FIRMWARE' then 'reset run', against
-    target/nrf52.cfg over interface/cmsis-dap.cfg with SWD.  FIRMWARE is
+    target/nrf52.cfg over the board's interface= script (cmsis-dap by
+    default) with SWD.  FIRMWARE is
     resolved by openocd relative to the current directory.
     Every selected board is attempted even if an earlier one failed; the
     exit status reflects the whole run.
@@ -1261,7 +1302,8 @@ reset  [PORT|DEVNAME]...
     no serial= in the devlist.  Exit status: 1 if any board failed.
 
 connect  [PORT|DEVNAME]...
-    Open each board's CDC console at 230400 baud and stream it, prefixing
+    Open each board's CDC console at its baud= (default 230400) and
+    stream it, prefixing
     every line with <DEVNAME>.  Lines are tallied into four buckets: ok,
     inversion, not-defined (all three matching "SDS TWR") and mismatch
     ("TX and round mismatch").  A spank report line ("Distance = ...",
