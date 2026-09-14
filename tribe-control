@@ -348,6 +348,14 @@ class CLI
         Integer(self.attribute(id, 'baud', 230400))
     end
 
+    # Does the devlist ask for a power cycle of this board at +moment+?
+    # The power_cycle key names one moment or a list of them, e.g.
+    # after-flash (the only one anything acts on today).
+    def power_cycle?(id, moment)
+        Array(self.attribute(id, 'power_cycle', [])).map(&:to_s)
+             .include?(moment.to_s)
+    end
+
     # List of registered devices
     def devices
         @devlist&.keys || []
@@ -750,6 +758,12 @@ class Flash < CLI::Command
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''
+
+        # Options
+        opts.separator 'Options:'
+        opts.on '--power-cycle', 'Power the port off and on again after a',
+                                 'successful flash, whatever the devlist',
+                                 'says (power_cycle = after-flash)'
     end
 
     def flash(firmware, **hopts, &block)
@@ -764,9 +778,24 @@ class Flash < CLI::Command
 
         each_device(argv).map do |name, hopts={}|
             flash(firmware, **hopts).tap do |ok|
-                if ok 
+                if ok
                 then tty&.success "Device #{name}: Flashed"
                 else tty&.error   "Device #{name}: Flashed failed"
+                end
+                # A DWM1001-DEV comes out of the openocd flash sequence
+                # (reset init, write, reset run) in a state where its DW1000
+                # never reports a transmission again until the module is
+                # power-cycled: it receives, resolves nothing, and logs
+                # "our TX timestamps are missing".  An SWD reset alone does
+                # not do it, so only the flash needs the cycle.  The devlist
+                # says which boards need it (power_cycle = after-flash), so
+                # a flash by hand on the hub gets it right; --power-cycle
+                # forces it for any board.
+                if ok && (opts[:'power-cycle'] ||
+                          @cli.power_cycle?(name, 'after-flash'))
+                    _, port = @cli.name_port(name)
+                    tty&.info "Device #{name}: power-cycling after flash"
+                    exsys.off(port); sleep(2); exsys.on(port)
                 end
             end
         end.all?(&:itself)
@@ -798,7 +827,7 @@ class Reset < CLI::Command
     def run(argv, **opts)
         each_device(argv).map do |name, hopts={}|
             reset(**hopts).tap do |ok|
-                if ok 
+                if ok
                 then tty&.success "Device #{name}: Reseted"
                 else tty&.error   "Device #{name}: Reset failed"
                 end
@@ -849,7 +878,7 @@ class Connect < CLI::Command
           dev_tty = Platform.usb_to_tty(hopts[:usb])
           tty&.info "Connecting to #{name} on #{dev_tty}"
           connected << [ name, hopts ]
-            ok, mismatch, inversion, not_defined = 0, 0, 0, 0
+            ok, mismatch, inversion, not_defined, failed = 0, 0, 0, 0, 0
             Thread.new do
                 UART.open dev_tty, @cli.baud(name) do |serial|
                     loop do
@@ -862,6 +891,10 @@ class Connect < CLI::Command
                       # cheap way to read a bench out.  A distance reported
                       # here is a successful exchange, same as an ok below.
                       when /Distance = /           then ok          += 1
+                      # "Resolving failed for <peer> (missing ...)" is not
+                      # an exchange at all; it used to be counted as ok
+                      # because it also says "SDS TWR".
+                      when /Resolving failed/      then failed      += 1
                       when /SDS TWR/
                         case line
                         when /not fully defined/   then not_defined += 1
@@ -876,7 +909,7 @@ class Connect < CLI::Command
                 end
             ensure
               success_rate = (100.0 * ok / (ok + inversion + not_defined)).round(2)
-              puts "<#{name}> SUMMARY: ok=#{ok} / inversion=#{inversion} / not-defined=#{not_defined} / mismatch=#{mismatch} tx-rate=#{success_rate}"
+              puts "<#{name}> SUMMARY: ok=#{ok} / inversion=#{inversion} / not-defined=#{not_defined} / failed=#{failed} / mismatch=#{mismatch} tx-rate=#{success_rate}"
             end
         end
 
@@ -1130,6 +1163,21 @@ Two optional keys describe a board that is not an nRF52-MDK (added
     baud        the console speed 'connect' opens, default 230400 (what the
                 MDK overlay sets).  The stock DWM1001-DEV devicetree runs
                 its console at 115200.
+    power_cycle the moments at which the board must have its port powered
+                off and on again: one name, or a list of them.  Known:
+                  after-flash   after a successful flash.  The DWM1001-DEV
+                                needs it: after openocd's reset init /
+                                write / reset run its DW1000 no longer
+                                reports transmissions (the board resolves
+                                nothing and logs "our TX timestamps are
+                                missing") until the module is power-cycled;
+                                a plain SWD reset is fine.  Measured
+                                2026-09-14: 0 distances in 30 s after a
+                                flash, 709 after the cycle.
+                A name nothing acts on is not an error, so a new moment can
+                be recorded here before the command that honours it exists.
+                It lives here, and not only as the flash --power-cycle
+                option, so that a flash by hand on the hub cannot forget it.
 
 'reserved' lists ports that must never be powered down.  'undeclared' says
 what to do with every port the file does not mention.  Both are described
@@ -1293,6 +1341,10 @@ flash  FIRMWARE [PORT|DEVNAME]...
     resolved by openocd relative to the current directory.
     Every selected board is attempted even if an earlier one failed; the
     exit status reflects the whole run.
+    A board whose devlist entry lists after-flash under power_cycle (see
+    DEVLIST: the DWM1001-DEV) has its port powered off and on again after
+    a successful flash; --power-cycle, before FIRMWARE, does the same for
+    any board.
     Selection methods: power (default), serial.  Exit status: 1 if any
     board failed.
 
@@ -1304,9 +1356,10 @@ reset  [PORT|DEVNAME]...
 connect  [PORT|DEVNAME]...
     Open each board's CDC console at its baud= (default 230400) and
     stream it, prefixing
-    every line with <DEVNAME>.  Lines are tallied into four buckets: ok,
-    inversion, not-defined (all three matching "SDS TWR") and mismatch
-    ("TX and round mismatch").  A spank report line ("Distance = ...",
+    every line with <DEVNAME>.  Lines are tallied into five buckets: ok, inversion, not-defined (all
+    three matching "SDS TWR"), failed ("Resolving failed", which also
+    says "SDS TWR" and was once counted as ok) and mismatch ("TX and
+    round mismatch").  A spank report line ("Distance = ...",
     see --command) counts as ok too: it is the same successful exchange
     reported by a cheaper path.  On exit each board prints a SUMMARY line
     with those counts and a tx-rate percentage.
