@@ -5,8 +5,12 @@
 # needs exsys, which is not installed on the workstation, so a suite that
 # imports it cannot run here.  Everything tested below is decided during
 # devlist parsing, which happens BEFORE the hub object is constructed, so
-# no test here touches a port, a board, or the radio.  'usb status' is the
-# only command used and it only reads.
+# the tests that only parse a devlist never reach the hub at all.
+#
+# Nothing here writes flash or switches a port off.  One test does reset
+# a board (see the positive control below), and the connect and flash
+# tests power the ports of the boards they name UP, which is the benign
+# direction and what those commands do anyway.
 #
 # What it covers, and why each is here: every one of these was a live
 # defect fixed on 2026-09-16, and none of them had a test.
@@ -21,6 +25,15 @@
 #                     the whole tool unusable with "port out of range"
 #   falsey key        attribute() returned its default for a key set to
 #                     false, so 'port = none' read as present
+#   flash/reset exit  each_device ran its jobs in forked processes, so the
+#                     parent's accumulator stayed empty, [].all? was true,
+#                     and both commands exited 0 however many boards had
+#                     failed.  reset from the day it was written
+#   no board          a declared port with nothing on it gave usb_to_tty
+#                     nil, which reached a reader thread that died
+#                     unjoined: the run went its full duration and
+#                     reported ok=0, tx-rate=NaN, which reads exactly like
+#                     a board that is up and silent
 #
 # Usage: sh scripts/test-tribe-control [host] [tribe-control-path]
 #
@@ -55,13 +68,67 @@ check "duplicate port refused"         "assigns the same port more than once" /t
 check "missing port refused"           "has no port"                          /tmp/t-noport.conf
 check "quoted port normalised"         " 8  DB"                               /tmp/t-quoted.conf
 
-got=$(ssh -o BatchMode=yes "root@$host" "$tc -D $dl connect B1 2>&1" || true)
-if printf '%s' "$got" | grep -qF "is not on the bench"; then
-    echo "ok    naming a port = none entry says so"
-else
-    echo "FAIL  naming a port = none entry says so"
-    fail=$((fail + 1))
-fi
+say () {  # say <name> <expected-substring> <command...>
+    got=$(ssh -o BatchMode=yes "root@$host" "$3 2>&1" || true)
+    if printf '%s' "$got" | grep -qF "$2"; then
+        echo "ok    $1"
+    else
+        echo "FAIL  $1"
+        echo "      wanted: $2"
+        echo "      got:    $(printf '%s' "$got" | tail -1)"
+        fail=$((fail + 1))
+    fi
+}
 
-ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-dup.conf /tmp/t-noport.conf /tmp/t-quoted.conf'
-[ "$fail" -eq 0 ] && echo "all devlist tests passed" || { echo "$fail failed"; exit 1; }
+status () {  # status <name> <expected-exit> <command...>
+    # && / || rather than $?: set -e is on, and a deliberately failing
+    # command would otherwise take the suite down before rc is read.
+    ssh -o BatchMode=yes "root@$host" "$3 >/dev/null 2>&1" && rc=0 || rc=$?
+    if [ "$rc" -eq "$2" ]; then
+        echo "ok    $1"
+    else
+        echo "FAIL  $1 (exit $rc, wanted $2)"
+        fail=$((fail + 1))
+    fi
+}
+
+say "naming a port = none entry says so" \
+    "is not on the bench" "$tc -D $dl connect B1"
+
+# The exit status of flash and reset.
+#
+# Both fold over what each_device returns, and each_device used to run
+# its jobs with Parallel.map's default in_processes: the children pushed
+# their results into their own copy of the parent's accumulator, so the
+# fold saw [], [].all? is true, and the command exited 0 however many
+# boards had failed.  reset was affected from the day it was written and
+# flash from the day serial became its default.  Nothing here touches a
+# board: the firmware does not exist, and the bogus serial means openocd
+# never finds an adapter to talk to.
+status "flash exits 1 when the firmware is missing" 1 \
+       "$tc -D $dl flash /tmp/tribe-test-no-such.hex DB"
+ssh -o BatchMode=yes "root@$host" \
+    "sed 's/000760103710/000000000000/' $dl > /tmp/t-badserial.conf"
+status "reset exits 1 when the probe cannot be found" 1 \
+       "$tc -D /tmp/t-badserial.conf reset DB"
+# The positive control.  Without it the two tests above would pass on a
+# tool that returned 1 for everything.  It is the one test here that acts
+# on a board: it reboots D4 over SWD, which is what reset is for and what
+# the bench does to it before every run anyway.
+status "reset exits 0 on a board it can reach" 0 \
+       "$tc -D $dl reset D4"
+
+# A declared port with no board on it.
+#
+# usb_to_tty returns nil there.  That nil used to be carried into a
+# reader thread that died in UART.open with nothing joining it, so the
+# run went its full duration and reported ok=0, tx-rate=NaN, which reads
+# as "the board is up and saying nothing" -- the one thing connect exists
+# to answer.  Port 11 is declared by nothing and has no board.
+ssh -o BatchMode=yes "root@$host" \
+    "printf 'X9 {\\n  interface = jlink\\n  baud = 115200\\n  port = 11\\n}\\n' | cat $dl - > /tmp/t-empty.conf"
+say "a port with no board is reported, not captured silently" \
+    "no console enumerated" "$tc -D /tmp/t-empty.conf connect --duration 1 X9"
+
+ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf'
+[ "$fail" -eq 0 ] && echo "all tribe-control tests passed" || { echo "$fail failed"; exit 1; }
