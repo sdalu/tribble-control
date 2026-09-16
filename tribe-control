@@ -863,6 +863,9 @@ class Connect < CLI::Command
                 'How long to capture for (default 600)'
         opts.on '--command=CMD', 'Shell command to send to every selected' \
                                  ' board once it is up (eg. spank syslog info)'
+        opts.on '--interactive', 'Type at the board: forward this' \
+                                 ' standard input to it, and stay until' \
+                                 ' end of input rather than for a duration'
         
     end
 
@@ -950,7 +953,44 @@ class Connect < CLI::Command
             end
         end
 
-        sleep(opts[:duration] || 600)
+        # Either we are being watched or we are being typed at.  A
+        # duration is what an unattended capture needs; a console is
+        # what a question needs, and it ends when the person asking
+        # says so, not on a timer they would have to guess in advance.
+        if opts[:interactive]
+            interact(connected)
+        else
+            sleep(opts[:duration] || 600)
+        end
+    end
+
+    # Stdin to the board, a line at a time.
+    #
+    # On a second, write-only handle for the same reason --command
+    # uses one: the reader thread holds the port, and one IO shared
+    # across two threads for opposite directions is a race waiting for
+    # a long bench run.  What comes back is printed by that thread,
+    # prefixed like everything else, so the answer to what was typed
+    # appears where the rest of the board's output does.
+    #
+    # Lines, not characters: the shell on the far end wants a complete
+    # line terminated by \r, and there is nowhere here to run a line
+    # editor.  Over ssh -t that is no loss -- the pty at the other end
+    # of the connection does the editing and the echo, so what arrives
+    # is already the line that was meant.
+    def interact(connected)
+        unless connected.size == 1
+            raise Error, 'connect: --interactive takes a single device'
+        end
+        name, hopts = connected.first
+        dev_tty = Platform.usb_to_tty(hopts[:usb])
+        tty&.info "Typing at #{name} (^D to leave)"
+        File.open(dev_tty, File::WRONLY | File::NOCTTY) do |w|
+            w.sync = true
+            while line = $stdin.gets
+                w.write("#{line.chomp}\r")
+            end
+        end
     end
 end
 end
@@ -1404,6 +1444,17 @@ connect  [PORT|DEVNAME]...
     ALWAYS run it under 'stdbuf -oL' if you are piping the output
     anywhere.  Without that, the pipe buffers in 4 KB blocks and 'tee'
     shows nothing for minutes.
+    --interactive is --command without the limit of one command decided
+    in advance: standard input is forwarded to the board, a line at a
+    time, and the console stays open until end of input instead of for
+    a --duration.  One device only -- there is one standard input, and
+    two boards sharing it could not be told apart or addressed
+    separately.  What the board replies appears in the stream like
+    anything else, prefixed with its name, so what was typed and what
+    came back read in order.
+    It is meant to be run through a terminal -- 'bench connect' opens it
+    over ssh -t, which is what supplies the editing and the echo of the
+    line being typed; a pipe works too, and sends what it is given.
     Selection method: usb only, so Linux only.  Exit status:
     0, or 1 on error; nothing about what the boards did.
 
@@ -1486,7 +1537,8 @@ flash and serial default to it.  Follow them with 'usb on' when you want
 the bench back.
 
 connect stops after 600 seconds unless --duration says otherwise; Ctrl-C
-is the other way out of a shorter run.
+is the other way out of a shorter run.  Under --interactive there is no
+timer at all: it ends on end of input (Ctrl-D) or on Ctrl-C.
 
 A board that emits no "SDS TWR" lines at all makes its SUMMARY report
 tx-rate=NaN, because the rate divides by the sum of three zero counters.
