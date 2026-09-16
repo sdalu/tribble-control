@@ -72,6 +72,14 @@ module FreeBSD
         }.map { |k, dev| '/dev/tty' + dev.dig(:ttyname) }
     end
 
+    # Not implemented here.  port_to_usb and usb_to_tty are Linux-only
+    # too, so --method usb has never worked on a FreeBSD host; this says
+    # which piece is missing instead of failing with NoMethodError.
+    def self.usb_to_serial(_path)
+        raise CLI::Error, 'reading a probe serial from the USB descriptor' \
+                          ' is implemented for Linux only'
+    end
+
     def self.nrf52mdk_mapping
         self.sysctl('dev.umodem').select {|k, v|
             v.dig(:'%pnpinfo') in { vendor: "0x0d28", product: "0x0204" }
@@ -123,10 +131,10 @@ module Linux
             tty = $1
             unless self.udevadm_query(root)[:DEVPATH]
                        .split(File::SEPARATOR) in [ *, root, _, _, _, ^tty, 'tty', ^tty]
-                raise Error, "unable to identify USB path for #{root}"
+                raise CLI::Error, "unable to identify USB path for #{root}"
             end
         when %r{^\d+-\d+(?:\.\d+)*$} # USB path root
-        else raise Error, "unhandled USB root (#{root})"
+        else raise CLI::Error, "unhandled USB root (#{root})"
         end
 
         # ExSYS USB hub is a 4x4 ports
@@ -142,6 +150,36 @@ module Linux
         if dev_path = Dir["/sys/bus/usb/devices/#{path}/**/tty/ttyACM*"]&.first
             File.join('/dev', File.basename(dev_path))
         end
+    end
+
+    # Vendor ids of the debug probes this bench carries: NXP/mbed for the
+    # DAPLink on an nRF52840-MDK, SEGGER for the J-Link OB on a
+    # DWM1001-DEV.
+    PROBE_VENDORS = %w[0d28 1366].freeze
+
+    # The probe's serial, from the USB descriptor the kernel already has.
+    #
+    # This used to be asked of openocd, which no longer answers. 0.12.0
+    # prints neither the CMSIS-DAP "Serial# =" line nor a J-Link "S/N",
+    # at any debug level, and 0.12.0 is still the current release, so
+    # there is no version to upgrade to. Reading the descriptor needs no
+    # SWD session, no openocd, and above all no powering the rest of the
+    # bench down to leave one adapter for openocd to find.
+    #
+    # An MDK puts its own hub in front of its DAPLink, so the probe sits
+    # one level below the hub port there while a J-Link sits on it; look
+    # at both, and take the first that is a probe with a serial.
+    def self.usb_to_serial(path)
+        raise ArgumentError if path.nil?
+        base = "/sys/bus/usb/devices/#{path}"
+        [ base, *Dir["#{base}.*"].sort ].each do |dev|
+            next unless File.file?("#{dev}/idVendor")
+            next unless PROBE_VENDORS.include?(File.read("#{dev}/idVendor").chomp)
+            next unless File.file?("#{dev}/serial")
+            serial = File.read("#{dev}/serial").chomp
+            return serial unless serial.empty?
+        end
+        nil
     end
     
     # private on its own does nothing here: this module has no instance
@@ -167,6 +205,7 @@ def self.exsys_ctrl(...)       = Current.exsys_ctrl(...)
 def self.nrf52mdk_mapping(...) = Current.nrf52mdk_mapping(...)
 def self.port_to_usb(...)      = Current.port_to_usb(...)
 def self.usb_to_tty(...)       = Current.usb_to_tty(...)
+def self.usb_to_serial(...)    = Current.usb_to_serial(...)
 
 end
 
@@ -185,7 +224,8 @@ class CLI
     class Command
         extend Forwardable
         def_delegators :@cli, :exsys, :tty, :conf, :openocd, :each_device,
-                              :port_list, :switchable, :offable, :devices
+                              :port_list, :switchable, :offable, :offable?,
+                              :devices
 
         # Derive command name from class
         def self.cmdname
@@ -211,6 +251,30 @@ class CLI
     # devlist key deciding the fate of ports the file does not mention
     UNDECLARED_KEY = 'undeclared'
     UNDECLARED     = [ :protect, :switch ].freeze
+
+    # Per-device devlist key: which hub port the board is on.
+    #
+    # Required on every device entry, and 'port = none' is how an entry
+    # says it is a record rather than a board on the bench.  Such an
+    # entry stays in the file -- its serial is worth keeping, and so is
+    # the comment saying when it stopped enumerating -- but tribe-control
+    # leaves it out of #devices, so it is never selected, never switched
+    # and never flashed.
+    #
+    # The port is the whole of it, deliberately: there is no separate
+    # 'present' or 'enabled' key.  Everything this tool can do to a board
+    # it does by hub port, so an entry without one is not addressable by
+    # definition, and a second key saying the same thing is a second key
+    # to disagree with the first.  'enabled' in particular would have
+    # read as "leave this port off", which is a different thing and one
+    # 'usb off' already does.
+    #
+    # Missing is an error rather than a synonym for none.  Deleting the
+    # port line is exactly what happens when a port is reassigned to
+    # another board, and inferring "gone" from a line somebody forgot
+    # would drop a live board silently.
+    PORT_KEY       = 'port'
+    PORT_NONE      = [ nil, 'none', 'null', '-' ].freeze
 
     # Parser
     Defaults     = { :'warm-up' => 5,
@@ -305,6 +369,13 @@ class CLI
             end
         else
             name = id
+            # Say which of the two it is.  "id not found" for a name that
+            # is in the file, and deliberately so, sends the reader to
+            # look for a typo that is not there.
+            if @devlist&.key?(id) && !self.present?(id)
+                raise Error, "device '#{id}' is not on the bench: the" \
+                             " devlist gives it #{PORT_KEY} = none"
+            end
             if port = @devlist.find {|k,v| k == id }&.last&.dig('port')
                 [ name, port ]
             end
@@ -326,6 +397,12 @@ class CLI
     end
 
     # Read an arbitrary key of a device (by port number or name)
+    #
+    # The default applies when the key is ABSENT, not when it is falsey.
+    # This used to end `entry&.dig(key) || default`, which handed back
+    # the default for a key explicitly set to false: 'present = false'
+    # read as present, and so would 'power_cycle = false'. A key that is
+    # there means what it says.
     def attribute(id, key, default = nil)
         return default if @devlist.nil?
         entry = case id
@@ -333,7 +410,8 @@ class CLI
                 when String  then @devlist.find {|k,v| k == id }&.last
                 else raise "unsupported id (#{id})"
                 end
-        entry&.dig(key) || default
+        return default if entry.nil? || !entry.key?(key)
+        entry[key]
     end
 
     # openocd interface script for a board: cmsis-dap (nRF52-MDK, the
@@ -356,8 +434,40 @@ class CLI
              .include?(moment.to_s)
     end
 
-    # List of registered devices
+    # The hub port of an entry, or nil when it declares none.
+    def port_of(id)
+        v = self.attribute(id, PORT_KEY)
+        v = v.downcase if v.is_a?(String)
+        return nil if PORT_NONE.include?(v)
+        begin
+            Integer(v)
+        rescue TypeError, ArgumentError
+            raise Error, "devlist entry '#{id}' has #{PORT_KEY} = #{v.inspect}," \
+                         " which is neither a port number nor none"
+        end
+    end
+
+    # Is there a board on the bench at this entry?  See PORT_KEY.
+    def present?(id)
+        !self.port_of(id).nil?
+    end
+
+    # List of registered devices, absent ones left out.
+    #
+    # Everything that walks the bench goes through here, so leaving an
+    # absent board out in one place keeps it out of all of them: it is
+    # not switched, not flashed, not connected to, and not counted among
+    # the ports #switchable may power down.  That last one used to raise
+    # KeyError instead: an entry with no port, which is the natural way
+    # to write down a board that is gone, made name_port() fail and took
+    # every 'usb off' with it.
     def devices
+        (@devlist&.keys || []).select {|n| self.present?(n) }
+    end
+
+    # Every entry, present or not.  For looking a serial up, which is the
+    # reason an absent board is kept in the file at all.
+    def declared
         @devlist&.keys || []
     end
 
@@ -395,6 +505,22 @@ class CLI
         (base - @reserved).tap {|l|
             raise Error, 'devlist leaves no switchable port' if l.empty?
         }
+    end
+
+    # May this one port be powered down?
+    #
+    # offable() raises, which is what an explicit 'usb off' wants: the
+    # user named a port and deserves to be told it is protected.  The
+    # two internal paths that switch a single port are not that.  They
+    # cut a port as a STEP of something else the user asked for -- the
+    # turn-by-turn off of --method power, the cycle a board's
+    # power_cycle key asks for after a flash -- so a protected port is a
+    # reason to skip the step and say so, not to abort an operation that
+    # has already succeeded.  Both used to call @exsys.off() with a raw
+    # port and no gate at all, which made them the two paths where the
+    # manual's "never one the devlist reserves" was not true.
+    def offable?(port, force: @opts[:force])
+        force || self.switchable.include?(port)
     end
 
     # Vet a set of ports about to be powered down.  An empty list means
@@ -436,7 +562,19 @@ class CLI
           sleep(@opts[:'warm-up'])
           
           @tty&.info "Parallelizing jobs"
-          Parallel.map(name_port_list.keys) do |name|
+          # in_threads, not the default.  Parallel.map with no option
+          # runs in_processes: the children fork, run this block, and
+          # push their results into their OWN copy of the accumulator
+          # that Enumerable#map made in the parent.  The parent's copy
+          # stays empty, so every caller that folds over the result --
+          # Flash#run and Reset#run both end with .all?(&:itself) -- was
+          # folding over [], which is true, and the command exited 0
+          # however many boards had failed.  The work here is
+          # Open3.capture2e on openocd, which releases the GVL for its
+          # whole duration, so threads keep the parallelism and keep the
+          # block in the parent's memory where its results can be seen.
+          Parallel.map(name_port_list.keys,
+                       in_threads: [ name_port_list.size, 1 ].max) do |name|
               block.call(name, serial: self.serial(name),
                                interface: self.interface(name))
           end
@@ -452,7 +590,23 @@ class CLI
 
           name_port_list.map do |name, port|
             usb = Platform.port_to_usb(port, root: @opts[:device])
-            block.call(name, usb: usb, interface: self.interface(name))
+            # The serial goes too, when the devlist has one.
+            #
+            # 'adapter usb location' does not select anything: measured
+            # on 2026-09-16 against openocd 0.12.0, the only release
+            # there is, with two CMSIS-DAP boards powered.  Asked for
+            # A2's probe path, A1's probe path, either of their hub
+            # paths, and a location that does not exist at all, it
+            # answered with the same chip every time (FICR.DEVICEID
+            # 5765c939, A2).  So this method disambiguated nothing, and
+            # 'connect --reset' with several MDKs powered reset whichever
+            # board openocd enumerated first while reporting success for
+            # each.  'adapter serial' does work -- that is what 'flash'
+            # relies on -- so pass it and let the location stand as the
+            # documentation of intent it has turned out to be.  A board
+            # with no serial= behaves exactly as before.
+            block.call(name, usb: usb, serial: self.serial(name),
+                             interface: self.interface(name))
           end
           
         when 'power'
@@ -474,7 +628,12 @@ class CLI
             sleep(@opts[:'warm-up'])
             block.call(name, interface: self.interface(name))
           ensure
-            @exsys.off(port)
+            if self.offable?(port)
+              @exsys.off(port)
+            else
+              @tty&.warn "#{name}: leaving port #{port} powered, the" \
+                         ' devlist protects it'
+            end
           end
           
         else raise 'unsupported flashing method'
@@ -559,6 +718,51 @@ class CLI
             @devlist  = raw.reject {|k,_|
                 [ RESERVED_KEY, UNDECLARED_KEY ].include?(k)
             }
+
+            # Every device says which port it is on, or says none. A
+            # forgotten port line is a mistake worth a message, not a
+            # board quietly dropped off the bench.
+            @devlist.each do |name, entry|
+                unless entry.is_a?(Hash) && entry.key?(PORT_KEY)
+                    raise Error, "devlist entry '#{name}' has no #{PORT_KEY}." \
+                                 " Give it the hub port, or" \
+                                 " '#{PORT_KEY} = none' if the board is no" \
+                                 ' longer on the bench'
+                end
+                # Normalise it here, once, so port_of() is the only place
+                # that has to know what a port may look like.  It accepts
+                # a string, deliberately, but name_port(), serial() and
+                # attribute() all compare the RAW value against an
+                # integer id, so a devlist written port = '7' used to
+                # load, count as present, and then leave the board
+                # unswitchable with "port out of range (7)" and unnamed
+                # in 'usb status'.  nil here means none, which is what
+                # PORT_NONE already says.
+                entry[PORT_KEY] = self.port_of(name)
+            end
+
+            # Two boards on one port is a devlist that cannot be right,
+            # and it is what a reassigned port leaves behind when the old
+            # entry keeps its number: the tool would then flash, power or
+            # connect to whichever of the two it happened to find first,
+            # under the other one's interface and baud. Caught here, at
+            # load, rather than by a board behaving oddly later.
+            #
+            # 'none' is exempt, that being its whole purpose: any number
+            # of entries may declare no port.
+            seen = Hash.new {|h, k| h[k] = [] }
+            @devlist.each_key {|name|
+                port = self.port_of(name)
+                seen[port] << name unless port.nil?
+            }
+            clash = seen.select {|_, names| names.size > 1 }
+            unless clash.empty?
+                detail = clash.sort.map {|port, names|
+                    "#{port} (#{names.map {|n| "'#{n}'" }.join(', ')})"
+                }.join('; ')
+                raise Error, "devlist assigns the same #{PORT_KEY} more" \
+                             " than once: #{detail}"
+            end
         end
 
         
@@ -703,7 +907,13 @@ class CLI
 class Serial < CLI::Command
     DESCRIPTION = 'Serial device'
 
-    Methods  = [ 'power' ]
+    # 'usb' only, and that is the point of the rewrite.  This command
+    # used to run openocd, which cannot choose between several adapters
+    # ("Multiple devices found, specify the desired device"), so it had
+    # to select with 'power': every port off, one back on, for each
+    # board in turn.  Asking a board which serial it has should not
+    # black out the bench, and reading the USB descriptor does not.
+    Methods  = [ 'usb' ]
     Defaults = { }
     Parser   = OptionParser.new do |opts|
         # Usage
@@ -715,18 +925,8 @@ class Serial < CLI::Command
         opts.separator ''
     end
 
-    def get_serial(**hopts, &block)
-        openocd('init', 'targets', **hopts) do |ok, output|
-          if ok == false
-            return false
-          elsif line = output.lines.select {|l|
-                         l.start_with?('Info : CMSIS-DAP: Serial# =') ||
-                         l =~ /^Info : J-Link .* S\/N (\d+)/ }.first
-              return line =~ /S\/N (\d+)/ ? $1 : line.split('=', 2).last.strip
-          else
-              return nil
-           end
-        end
+    def get_serial(**hopts)
+        Platform.usb_to_serial(hopts[:usb])
     end
     
     def run(argv, **opts)
@@ -748,7 +948,17 @@ class CLI
 class Flash < CLI::Command
     DESCRIPTION = 'Flash devices'
 
-    Methods  = [ 'power', 'serial' ]
+    # 'serial' first, so it is the default (Methods.first).  'power'
+    # was, and it cuts every port and re-powers one board at a time: the
+    # whole bench in sequential rounds, left powered down at the end.
+    # Selecting by adapter serial needs serial= on every board, which the
+    # devlist now has, and it was measured on 2026-09-16 rather than
+    # assumed: with all four J-Links live, a flash addressed by serial
+    # landed on the board whose FICR.DEVICEID matched and left its
+    # neighbours' flash byte-for-byte unchanged, and the devlist's
+    # power_cycle = after-flash still fired.  'power' stays for a board
+    # whose serial is missing or wrong.
+    Methods  = [ 'serial', 'power' ]
     Defaults = { }
     Parser   = OptionParser.new do |opts|
         # Usage
@@ -794,8 +1004,19 @@ class Flash < CLI::Command
                 if ok && (opts[:'power-cycle'] ||
                           @cli.power_cycle?(name, 'after-flash'))
                     _, port = @cli.name_port(name)
-                    tty&.info "Device #{name}: power-cycling after flash"
-                    exsys.off(port); sleep(2); exsys.on(port)
+                    if offable?(port)
+                        tty&.info "Device #{name}: power-cycling after flash"
+                        exsys.off(port); sleep(2); exsys.on(port)
+                    else
+                        # Saying it plainly matters: a DWM1001 that misses
+                        # its cycle comes out of the flash with a DW1000
+                        # that reports no transmission, which looks like a
+                        # radio fault rather than a skipped step.
+                        tty&.warn "Device #{name}: NOT power-cycling," \
+                                  " the devlist protects port #{port}." \
+                                  ' The board may be in the state' \
+                                  ' power_cycle exists to avoid'
+                    end
                 end
             end
         end.all?(&:itself)
@@ -877,8 +1098,23 @@ class Connect < CLI::Command
         end
       
         connected = []
-        threads = each_device(argv).map do |name, hopts={}|
+        each_device(argv).each do |name, hopts={}|
+          # No tty, no reader.  usb_to_tty returns nil when the glob finds
+          # no ttyACM under the port: the board is dead, unplugged, or
+          # simply slower to enumerate than --warm-up allowed.  This used
+          # to carry the nil onward, print "Connecting to C2 on " with an
+          # empty path, count the board as connected, and build a reader
+          # thread around nil.  The thread died in UART.open, nothing
+          # joined it, and the run went its full duration and reported
+          # "ok=0 ... tx-rate=NaN" -- indistinguishable from a board that
+          # is up and saying nothing, which is the one question 'connect'
+          # exists to answer.
           dev_tty = Platform.usb_to_tty(hopts[:usb])
+          if dev_tty.nil?
+            tty&.error "Device #{name}: no console enumerated at" \
+                       " #{hopts[:usb]}; not capturing it"
+            next
+          end
           tty&.info "Connecting to #{name} on #{dev_tty}"
           connected << [ name, hopts ]
             ok, mismatch, inversion, not_defined, failed = 0, 0, 0, 0, 0
@@ -1176,10 +1412,21 @@ is the only thing that tells tribe-control which ports it may touch.
     A2 {                                             port = 3 }
     A3 { serial = '1026360213072dde0000...97969902'  port = 4 }
     A1 { serial = '102636021605598e0000...97969902'  port = 5 }
-    B1 { serial = '1026360202c4dc0f0000...97969902'  port = 6 }
+    B1 { serial = '1026360202c4dc0f0000...97969902'  port = none }
 
 Indentation is not significant; the serials above are elided in the middle
 for width, the real ones are 48 hex characters and must be pasted whole.
+
+Every device entry must carry a port, and 'port = none' is how one says
+it is a record rather than a board on the bench.  B1 above is the case:
+it stopped enumerating, its port was given to another board, and the
+entry stays so that its serial is not lost.  Such an entry is left out of
+everything -- never selected, never switched, never flashed -- and naming
+it says so ("device 'B1' is not on the bench").  A MISSING port is an
+error, not a synonym for none: deleting the port line is exactly what
+happens when a port is reassigned, and inferring "gone" from a line
+somebody forgot would drop a live board silently.  Two entries claiming
+one port is refused at load, none excepted.
 
 Every key other than 'reserved' and 'undeclared' is a device.  A command
 given no device names operates on all of them.  Names may be used anywhere
@@ -1223,10 +1470,13 @@ Two optional keys describe a board that is not an nRF52-MDK (added
 what to do with every port the file does not mention.  Both are described
 under PROTECTED PORTS.
 
-There is no schema and no validation.  A misspelled 'reserverd' becomes a
-device named reserverd and silently unprotects four Raspberry Pis, so
-after editing this file run 'usb status' and read the protected column
-before you trust it.
+A misspelled 'reserverd' becomes a device named reserverd, which would
+silently unprotect four Raspberry Pis.  That one is now caught: every
+device entry must carry a port, so the misspelling is refused at load
+with "devlist entry 'reserverd' has no port".  Validation stops there,
+though -- a serial, an interface or a baud that is wrong is wrong
+silently -- so after editing this file still run 'usb status' and read
+the names and the protected column before you trust it.
 
 
 PROTECTED PORTS
@@ -1300,17 +1550,17 @@ There are three ways, chosen with -m/--method:
 
 Which to use:
 
-    power    the default, and the only one that needs no configuration --
-             it identifies a board by being the only one powered.  Slowest
-             by far: every board costs a power cycle plus the warm-up, so
-             the whole bench is six sequential rounds.  It also leaves
-             every declared board POWERED OFF when it finishes, because
-             each port is switched off again after its turn.  Run
-             'usb on' afterwards to bring the bench back up.
-    serial   use once every board has a serial= in the devlist.  Boards
-             stay powered and are done in parallel, so it is much faster
-             and far less disruptive.  Aborts if any selected board lacks
-             a serial.
+    serial   the default for 'flash' and 'reset'.  Boards stay powered
+             and are done in parallel, so it is much faster and far less
+             disruptive.  Aborts if any selected board lacks a serial=.
+    power    needs no configuration at all -- it identifies a board by
+             being the only one powered -- and is the fallback for a
+             board whose serial= is missing or wrong.  Slowest by far:
+             every board costs a power cycle plus the warm-up, so the
+             whole bench is sequential rounds.  It also leaves every
+             declared board POWERED OFF when it finishes, because each
+             port is switched off again after its turn.  Run 'usb on'
+             afterwards to bring the bench back up.
     usb      what 'connect' uses.  Addresses by USB topology, so it needs
              no serials, but it is Linux-only.
 
@@ -1320,8 +1570,8 @@ first as its default:
     command    methods accepted          default
     -------    ----------------          -------
     usb        (none: acts on ports)     n/a
-    serial     power                     power
-    flash      power, serial             power
+    serial     usb                       usb
+    flash      serial, power             serial
     reset      serial                    serial
     connect    usb                       usb
 
@@ -1366,13 +1616,19 @@ usb  status|on|off|toggle|set  [PORT|DEVNAME]...
 
 serial  [PORT|DEVNAME]...
     Report each board's CMSIS-DAP serial number, by running openocd and
-    reading back "Info : CMSIS-DAP: Serial# =" (or the J-Link S/N line
-    for interface = jlink).  Prints one line per
-    board, "Serial for A1: 1026...".  Use it to populate the devlist.
-    Selection method: power only -- identifying a board is precisely what
-    is missing at this point, so it has to be done by elimination.  That
-    means it power-cycles the bench and leaves it off; see DEVICE
-    SELECTION.  Exit status: 1 if any board could not be read.
+    reading the USB descriptor the kernel already holds.  Prints one line
+    per board, "Serial for A1: 1026...".  Use it to populate the devlist.
+    Selection method: usb only, so Linux only.  It powers the boards' own
+    ports up and leaves the rest of the bench alone -- asking a board its
+    serial is not a reason to black out the hub.  Exit status: 1 if any
+    board could not be read.
+
+    It used to ask openocd and parse "Info : CMSIS-DAP: Serial# =" or a
+    J-Link "S/N" line, which is why it needed --method power: openocd
+    cannot choose between adapters, so a board had to be the only one
+    powered.  openocd 0.12.0 prints neither line at any debug level, and
+    0.12.0 is the current release, so that route is gone rather than
+    merely slow.
 
 flash  FIRMWARE [PORT|DEVNAME]...
     openocd 'flash write_image erase FIRMWARE' then 'reset run', against
@@ -1385,7 +1641,7 @@ flash  FIRMWARE [PORT|DEVNAME]...
     DEVLIST: the DWM1001-DEV) has its port powered off and on again after
     a successful flash; --power-cycle, before FIRMWARE, does the same for
     any board.
-    Selection methods: power (default), serial.  Exit status: 1 if any
+    Selection methods: serial (default), power.  Exit status: 1 if any
     board failed.
 
 reset  [PORT|DEVNAME]...
@@ -1472,8 +1728,12 @@ Add a board on a new port.  'serial 7' will not work: an undeclared port
 has no name, and the tool refuses to power ports the devlist never
 mentions.  Declare a stub first, then read the serial and fill it in:
 
-    echo "X1 { port = 7 }" >> devlist.conf
+    echo "X1 { port = 11 }" >> devlist.conf
     ./tribe-control -D devlist.conf serial X1
+
+Pick a port nothing else declares.  Two entries on one port is refused at
+load time, for every command including 'usb status', so a collision here
+leaves the devlist unusable until it is edited back.
 
 Flash the whole bench, then just two boards:
 
@@ -1533,8 +1793,10 @@ what the capture recipe does, so do not use that shape in a script
 without a pipefail or a temporary file.
 
 --method power leaves every declared board powered off when it finishes.
-flash and serial default to it.  Follow them with 'usb on' when you want
-the bench back.
+Nothing defaults to it any more: flash defaults to serial, reset is
+serial only, and serial and connect are usb only.  You get it by asking
+for it with -m power, and then you want 'usb on' afterwards to bring the
+bench back.
 
 connect stops after 600 seconds unless --duration says otherwise; Ctrl-C
 is the other way out of a shorter run.  Under --interactive there is no

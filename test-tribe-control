@@ -1,0 +1,67 @@
+#!/bin/sh
+# Regression tests for tribe-control's devlist layer.
+#
+# Runs on the bench host, because that is where the gems are: the tool
+# needs exsys, which is not installed on the workstation, so a suite that
+# imports it cannot run here.  Everything tested below is decided during
+# devlist parsing, which happens BEFORE the hub object is constructed, so
+# no test here touches a port, a board, or the radio.  'usb status' is the
+# only command used and it only reads.
+#
+# What it covers, and why each is here: every one of these was a live
+# defect fixed on 2026-09-16, and none of them had a test.
+#
+#   missing port      an entry with no port used to make 'usb off' raise
+#                     KeyError and take every power-down with it
+#   duplicate port    a reassigned port left on the old entry addressed
+#                     one board under the other's interface and baud
+#   port = none       a retired entry must be invisible to selection but
+#                     still nameable, with an error that says which
+#   quoted port       port = '8' loaded, counted as present, then made
+#                     the whole tool unusable with "port out of range"
+#   falsey key        attribute() returned its default for a key set to
+#                     false, so 'port = none' read as present
+#
+# Usage: sh scripts/test-tribe-control [host] [tribe-control-path]
+#
+# The second argument exists so the suite can be pointed at a deliberately
+# broken copy: a test that has never been seen to fail is not evidence.
+set -e
+host=${1:-134.214.146.186}
+tc=${2:-/root/tribe-control}
+dl=/root/devlist.conf
+fail=0
+
+check () {  # check <name> <expected-substring> <devlist-file>
+    got=$(ssh -o BatchMode=yes "root@$host" "$tc -D $3 usb status 2>&1" || true)
+    if printf '%s' "$got" | grep -qF "$2"; then
+        echo "ok    $1"
+    else
+        echo "FAIL  $1"
+        echo "      wanted: $2"
+        echo "      got:    $(printf '%s' "$got" | tail -1)"
+        fail=$((fail + 1))
+    fi
+}
+
+ssh -o BatchMode=yes "root@$host" "
+  sed 's/^  port        = none/  port        = 8/'      $dl > /tmp/t-dup.conf
+  sed 's/^  port        = none//'                       $dl > /tmp/t-noport.conf
+  sed \"s/^  port        = 8\\$/  port        = '8'/\"   $dl > /tmp/t-quoted.conf
+"
+
+check "good devlist names port 8"      " 8  DB" "$dl"
+check "duplicate port refused"         "assigns the same port more than once" /tmp/t-dup.conf
+check "missing port refused"           "has no port"                          /tmp/t-noport.conf
+check "quoted port normalised"         " 8  DB"                               /tmp/t-quoted.conf
+
+got=$(ssh -o BatchMode=yes "root@$host" "$tc -D $dl connect B1 2>&1" || true)
+if printf '%s' "$got" | grep -qF "is not on the bench"; then
+    echo "ok    naming a port = none entry says so"
+else
+    echo "FAIL  naming a port = none entry says so"
+    fail=$((fail + 1))
+fi
+
+ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-dup.conf /tmp/t-noport.conf /tmp/t-quoted.conf'
+[ "$fail" -eq 0 ] && echo "all devlist tests passed" || { echo "$fail failed"; exit 1; }
