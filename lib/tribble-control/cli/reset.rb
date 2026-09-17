@@ -1,10 +1,10 @@
 require_relative '../cli'
 
-module TribeControl
+module TribbleControl
 
 class CLI
 class Reset < CLI::Command
-    DESCRIPTION = 'reset devices'
+    DESCRIPTION = 'Reset devices over SWD'
 
     # Every board goes through openocd: check for it up front.
     OPENOCD     = true

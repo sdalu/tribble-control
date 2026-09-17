@@ -23,7 +23,7 @@ class TestHub < Minitest::Test
         super
     end
 
-    def usb(*argv) = TribeControl::CLI::USB.new(@cli).run(argv, force: false)
+    def usb(*argv) = TribbleControl::CLI::USB.new(@cli).run(argv, force: false)
 
     def test_status_reads_the_real_port_state
         assert_equal [ 2, 3 ], @hub.ports_on
@@ -51,14 +51,14 @@ class TestHub < Minitest::Test
 
     def test_a_reserved_port_is_refused_by_name
         usb('on')
-        e = assert_raises(TribeControl::CLI::Error) { usb('off', '16') }
+        e = assert_raises(TribbleControl::CLI::Error) { usb('off', '16') }
         assert_match(/refusing to power down port\(s\) 16/, e.message)
         assert_includes @hub.ports_on, 16, 'the reserved port was cut anyway'
     end
 
     def test_an_undeclared_port_is_protected_too
         usb('on')
-        assert_raises(TribeControl::CLI::Error) { usb('off', '9') }
+        assert_raises(TribbleControl::CLI::Error) { usb('off', '9') }
         assert_includes @hub.ports_on, 9
     end
 
@@ -95,7 +95,7 @@ class TestHub < Minitest::Test
         hub = FakeHub.new(state: 0, password: 'other')
         cli = cli_for(DEVLIST, '-p', 'pass', device: hub.path)
         assert_raises(ExSYS::ManagedUSB::Error) {
-            TribeControl::CLI::USB.new(cli).run([ 'on', '1' ], force: false) }
+            TribbleControl::CLI::USB.new(cli).run([ 'on', '1' ], force: false) }
     ensure
         hub&.close
     end

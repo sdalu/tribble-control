@@ -16,7 +16,7 @@
 # parenthesised for the reader.
 
 AllCops:
-  # tribe-control uses endless method definitions and `in` pattern
+  # tribble-control uses endless method definitions and `in` pattern
   # matching, both 3.0+. Without this, rubocop defaults to
   # TargetRubyVersion 2.7, fails to parse the file, and reports dozens
   # of Lint/Syntax offences that are artefacts of the wrong parser: the
@@ -37,7 +37,7 @@ AllCops:
 
 # Off, and this is the one trade-off in the file worth knowing about.
 #
-# The classes sit at column 0 inside `module TribeControl` -- what the
+# The classes sit at column 0 inside `module TribbleControl` -- what the
 # single script did with its own wrappers, kept when it was split so
 # that not one of 1800 lines had to be re-indented. This cop's first
 # complaint is therefore structural, 27 of them, and there is no way to
@@ -199,7 +199,7 @@ Layout/SpaceAroundEqualsInParameterDefault: { Enabled: false }
 Layout/HeredocIndentation:                { Enabled: false }
 Style/AccessorGrouping:                   { Enabled: false }
 
-# The gem is tribe-control, so its entry point is tribe-control.rb.
+# The gem is tribble-control, so its entry point is tribble-control.rb.
 Naming/FileName:                          { Enabled: false }
 
 # each_device yields (name, options) pairs from an enumerator, not a

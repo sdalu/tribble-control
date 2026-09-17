@@ -15,7 +15,7 @@ require 'parallel'
 require_relative 'version'
 require_relative 'platform'
 
-module TribeControl
+module TribbleControl
 
 class CLI
     # Command line error reporting
@@ -88,7 +88,7 @@ class CLI
     # Required on every device entry, and 'port = none' is how an entry
     # says it is a record rather than a board on the bench.  Such an
     # entry stays in the file -- its serial is worth keeping, and so is
-    # the comment saying when it stopped enumerating -- but tribe-control
+    # the comment saying when it stopped enumerating -- but tribble-control
     # leaves it out of #devices, so it is never selected, never switched
     # and never flashed.
     #
@@ -133,7 +133,7 @@ class CLI
                                        'the whole log to FILE if given'
         opts.on '-v', '--[no-]verbose',    'Run verbosely'
         opts.on '-V', '--version',         'Version' do
-            puts "tribe-control : #{TribeControl::VERSION}"
+            puts "tribble-control : #{TribbleControl::VERSION}"
             puts "ExSYS library : #{ExSYS::VERSION}"
             exit
         end
@@ -163,14 +163,14 @@ class CLI
         end
     end
 
-    # Where the manual lives.  It sat after __END__ while tribe-control
+    # Where the manual lives.  It sat after __END__ while tribble-control
     # was a single script; lib/ is required rather than run, so DATA is
     # not defined there and the page is a file shipped beside the code.
     #
     # man/man1/ rather than man/: that shape is a MANPATH entry as it
-    # stands, so `MANPATH=<gem>/man man tribe-control` works on an
+    # stands, so `MANPATH=<gem>/man man tribble-control` works on an
     # installed gem without anything having to be copied anywhere.
-    MANUAL = File.expand_path('../../man/man1/tribe-control.1', __dir__)
+    MANUAL = File.expand_path('../../man/man1/tribble-control.1', __dir__)
 
     # How to turn that page into text, in the order they are tried.
     # mandoc first: it reads the UTF-8 the diagrams are drawn in without
@@ -461,7 +461,7 @@ class CLI
         }
     end
 
-    # Ports tribe-control may power down.  Ports the devlist does not
+    # Ports tribble-control may power down.  Ports the devlist does not
     # mention are protected unless 'undeclared' says otherwise, and ports
     # named by 'reserved' are protected either way.  That is what keeps
     # the Raspberry Pi power feeds out of reach.
@@ -873,7 +873,7 @@ class CLI
         # No wrapper of ours: exsys holds an exclusive lock on the
         # serial line for the whole of each call, the read-modify-write
         # of an on/off included, and that covers every process touching
-        # the hub rather than only the tribe-control ones a lock file of
+        # the hub rather than only the tribble-control ones a lock file of
         # ours could know about.  SerialisedHub did this job from the
         # outside until exsys 1.0; nothing here needs a lock spanning
         # two calls, and the one candidate -- the turn-by-turn cycling

@@ -1,10 +1,10 @@
 require_relative '../cli'
 
-module TribeControl
+module TribbleControl
 
 class CLI
 class Serial < CLI::Command
-    DESCRIPTION = 'Serial device'
+    DESCRIPTION = "Report a debug probe's serial number"
 
     # 'usb' only, and that is the point of the rewrite.  This command
     # used to run openocd, which cannot choose between several adapters

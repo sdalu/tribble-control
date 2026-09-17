@@ -1,6 +1,6 @@
 require_relative '../cli'
 
-module TribeControl
+module TribbleControl
 
 class CLI
 class Flash < CLI::Command

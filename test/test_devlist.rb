@@ -63,7 +63,7 @@ class TestDevlist < Minitest::Test
     def test_work_area_takes_hex_or_none_and_refuses_the_rest
         assert_equal 0x800, cli_for("A1 { port = 1, work_area = 0x800 }").work_area('A1')
         assert_nil          cli_for("A1 { port = 1, work_area = none }").work_area('A1')
-        e = assert_raises(TribeControl::CLI::Error) {
+        e = assert_raises(TribbleControl::CLI::Error) {
             cli_for("A1 { port = 1, work_area = plenty }").work_area('A1') }
         assert_match(/neither a size nor none/, e.message)
     end
@@ -95,18 +95,18 @@ class TestDevlist < Minitest::Test
     def test_offable_refuses_a_protected_port_by_name
         cli = cli_for("reserved = [ 2 ]\nA1 { port = 1 }\nA2 { port = 2 }")
         assert_equal [ 1 ], cli.offable([])
-        e = assert_raises(TribeControl::CLI::Error) { cli.offable([ 2 ]) }
+        e = assert_raises(TribbleControl::CLI::Error) { cli.offable([ 2 ]) }
         assert_match(/refusing to power down port\(s\) 2/, e.message)
     end
 
     def test_a_port_out_of_range_is_refused
         cli = cli_for("A1 { port = 1 }")
-        assert_raises(TribeControl::CLI::Error) { cli.port_list([ '17' ]) }
+        assert_raises(TribbleControl::CLI::Error) { cli.port_list([ '17' ]) }
     end
 
     def test_naming_an_absent_board_says_which
         cli = cli_for("A1 { port = 1 }\nOld { port = none }")
-        e = assert_raises(TribeControl::CLI::Error) { cli.name_port('Old') }
+        e = assert_raises(TribbleControl::CLI::Error) { cli.name_port('Old') }
         assert_match(/is not on the bench/, e.message)
     end
 end

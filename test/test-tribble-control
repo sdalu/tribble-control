@@ -1,5 +1,5 @@
 #!/bin/sh
-# Regression tests for tribe-control's devlist layer.
+# Regression tests for tribble-control's devlist layer.
 #
 # Runs on the bench host, because that is where the gems are: the tool
 # needs exsys, which is not installed on the workstation, so a suite that
@@ -35,10 +35,10 @@
 #                     reported ok=0, tx-rate=NaN, which reads exactly like
 #                     a board that is up and silent
 #
-# Usage: sh test-tribe-control HOST [tribe-control-path] [tally-path]
-#    or: TRIBE_HOST=<host> sh test-tribe-control
+# Usage: sh test-tribble-control HOST [tribble-control-path] [tally-path]
+#    or: TRIBBLE_HOST=<host> sh test-tribble-control
 #
-# tribe-control is installed as a gem on the hub host, so the default is
+# tribble-control is installed as a gem on the hub host, so the default is
 # the bare name and PATH answers it. The second argument exists so the
 # suite can be pointed at a deliberately broken copy: a test that has
 # never been seen to fail is not evidence.
@@ -51,7 +51,7 @@ set -e
 # No default host. One lab's address does not belong in a tool that is
 # meant to drive any ExSYS hub, and a suite that silently aims at
 # somebody else's bench is worse than one that refuses to start. Give
-# it as the first argument or in TRIBE_HOST.
+# it as the first argument or in TRIBBLE_HOST.
 #
 # The rest of what is baked in below IS this bench's inventory, on
 # purpose: board names (DB, D4, B1), DB's probe serial and its USB
@@ -59,13 +59,13 @@ set -e
 # names a specific board on a specific hub, and a test that did not
 # would not be testing anything. Editing them is what pointing this
 # suite at another bench means.
-host=${1:-${TRIBE_HOST:-}}
+host=${1:-${TRIBBLE_HOST:-}}
 if [ -z "$host" ]; then
-    printf 'usage: %s HOST [tribe-control-path] [tally-path]\n' "$0" >&2
-    printf '   or: TRIBE_HOST=<host> %s\n' "$0" >&2
+    printf 'usage: %s HOST [tribble-control-path] [tally-path]\n' "$0" >&2
+    printf '   or: TRIBBLE_HOST=<host> %s\n' "$0" >&2
     exit 2
 fi
-tc=${2:-tribe-control}
+tc=${2:-tribble-control}
 tally=${3:-/root/twr-tally.rb}
 dl=/root/devlist.conf
 fail=0
@@ -150,12 +150,12 @@ status "--man exits 0"         0             "$tc --man"
 ssh -o BatchMode=yes "root@$host" \
     "sed 's/^\\( *port *= *\\)[0-9][0-9]*/\\1none/' $dl > /tmp/t-none.conf"
 say "an empty device selection is refused" \
-    "no device selected" "$tc -D /tmp/t-none.conf flash /tmp/tribe-test-no-such.hex"
-status "and it exits 1" 1 "$tc -D /tmp/t-none.conf flash /tmp/tribe-test-no-such.hex"
+    "no device selected" "$tc -D /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
+status "and it exits 1" 1 "$tc -D /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
 # The positive control: the same command on the real devlist gets past
 # selection and fails later, on the missing firmware, not on selection.
 say "a real devlist still selects its boards" \
-    "Devices :" "$tc -D $dl flash /tmp/tribe-test-no-such.hex DB"
+    "Devices :" "$tc -D $dl flash /tmp/tribble-test-no-such.hex DB"
 
 # Types.
 #
@@ -196,7 +196,7 @@ say "a missing --require file is refused" \
     "no such file to require" \
     "$tc -D $dl -r /tmp/no-such-tally.rb usb status"
 ssh -o BatchMode=yes "root@$host" \
-    "printf 'class T\n def initialize(d); @n = 0; end\n def <<(l); @n += 1; self; end\n def summary; %s; end\nend\nTribeControl::Tally.register(:test) {|d| T.new(d) }\n' \\
+    "printf 'class T\n def initialize(d); @n = 0; end\n def <<(l); @n += 1; self; end\n def summary; %s; end\nend\nTribbleControl::Tally.register(:test) {|d| T.new(d) }\n' \\
      '\"seen=#{@n}\"' > /tmp/t-tally.rb"
 status "a --require'd file loads" 0 "$tc -D $dl -r /tmp/t-tally.rb usb status"
 
@@ -211,7 +211,7 @@ status "a --require'd file loads" 0 "$tc -D $dl -r /tmp/t-tally.rb usb status"
 # board: the firmware does not exist, and the bogus serial means openocd
 # never finds an adapter to talk to.
 status "flash exits 1 when the firmware is missing" 1 \
-       "$tc -D $dl flash /tmp/tribe-test-no-such.hex DB"
+       "$tc -D $dl flash /tmp/tribble-test-no-such.hex DB"
 ssh -o BatchMode=yes "root@$host" \
     "sed 's/000760103710/000000000000/' $dl > /tmp/t-badserial.conf"
 status "reset exits 1 when the probe cannot be found" 1 \
@@ -238,7 +238,7 @@ say "a port with no board is reported, not captured silently" \
 
 # The power-cycle gate, which is the one test here that writes flash.
 #
-# Opt-in, because it does: TRIBE_TEST_FLASH=1 sh test-tribe-control
+# Opt-in, because it does: TRIBBLE_TEST_FLASH=1 sh test-tribble-control
 #
 # It cannot be done any other way.  The warning it checks for fires only
 # after a SUCCESSFUL flash, so there has to be one.  What keeps it safe is
@@ -272,7 +272,7 @@ ocd () {  # ocd <serial> <command>
     ssh -o BatchMode=yes "root@$host" "openocd -c 'set WORKAREASIZE 0x4000' -c 'source [find interface/jlink.cfg]' -c 'transport select swd' -c 'source [find target/nrf52.cfg]' -c 'adapter serial $1' -c init -c 'reset halt' -c '$2' -c 'reset run' -c shutdown 2>&1"
 }
 
-if [ -n "${TRIBE_TEST_FLASH:-}" ]; then
+if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
     dbserial=000760103710                 # DB, hub port 8
     page=0x0007f000                       # its last page
 
@@ -336,8 +336,8 @@ if [ -n "${TRIBE_TEST_FLASH:-}" ]; then
         fi
     fi
 else
-    echo "skip  power-cycle gate (TRIBE_TEST_FLASH=1 to run it; it writes flash)"
+    echo "skip  power-cycle gate (TRIBBLE_TEST_FLASH=1 to run it; it writes flash)"
 fi
 
 ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf /tmp/t-tally.rb'
-[ "$fail" -eq 0 ] && echo "all tribe-control tests passed" || { echo "$fail failed"; exit 1; }
+[ "$fail" -eq 0 ] && echo "all tribble-control tests passed" || { echo "$fail failed"; exit 1; }

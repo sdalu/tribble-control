@@ -3,7 +3,7 @@
 #
 require_relative 'cli'
 
-module TribeControl
+module TribbleControl
 
 # A running count of what a board printed, and one line saying so.
 #
@@ -20,7 +20,7 @@ module TribeControl
 # firmware can honestly say.  Anything that knows more is a block,
 # registered from a file loaded with -r/--require:
 #
-#     TribeControl::Tally.register(:twr) do |device|
+#     TribbleControl::Tally.register(:twr) do |device|
 #         MyTally.new(device)
 #     end
 #

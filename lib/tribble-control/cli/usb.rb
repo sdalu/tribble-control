@@ -1,6 +1,6 @@
 require_relative '../cli'
 
-module TribeControl
+module TribbleControl
 
 class CLI
 class USB < CLI::Command
@@ -30,7 +30,7 @@ class USB < CLI::Command
         when 'status'
             # Read-only: asks the hub for its port mask and prints it
             # next to the devlist, so you can see what is on and what
-            # tribe-control is allowed to switch before you switch it.
+            # tribble-control is allowed to switch before you switch it.
             state = exsys.get(:ports)
             named = devices.to_h {|n| [ port_list([ n ]).first, n ] }
             safe  = begin

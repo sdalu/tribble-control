@@ -2,11 +2,11 @@ require_relative '../cli'
 require_relative '../tally'
 require 'uart'
 
-module TribeControl
+module TribbleControl
 
 class CLI
 class Connect < CLI::Command
-    DESCRIPTION = 'Connect to device'
+    DESCRIPTION = 'Read board consoles'
 
     # usb first, so it stays the default where it works.  serial is
     # what reaches a console on a host with no /sys/bus/usb: it needs
@@ -87,7 +87,7 @@ class Connect < CLI::Command
             # happens to be on the bench this month, and they change
             # without a hub changing.  The tally named by the devlist
             # is handed every line and asked, at the end, for one
-            # summary.  See TribeControl::Tally, and --require.
+            # summary.  See TribbleControl::Tally, and --require.
             counter = Tally.build(tally(name), name)
             Thread.new do
                 UART.open dev_tty, @cli.baud(name) do |serial|

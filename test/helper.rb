@@ -4,11 +4,11 @@
 #
 # Everything here runs on a workstation: the devlist layer, the tally
 # registry, the openocd command line, and -- through test/support's pty
-# emulator -- the hub exchange itself. test/test-tribe-control is the
+# emulator -- the hub exchange itself. test/test-tribble-control is the
 # other half, and needs the bench.
 
 require 'minitest/autorun'
-require_relative '../lib/tribe-control'
+require_relative '../lib/tribble-control'
 require_relative 'support/fake_hub'
 
 module DevlistHelper
@@ -20,10 +20,10 @@ module DevlistHelper
     # +argv+ are global options; +command+ is the one parse insists on
     # having, and 'usb' is the one that reaches the hub for nothing.
     def cli_for(devlist, *argv, command: 'usb', device: File::NULL)
-        file = File.join(Dir.mktmpdir('tribe-test'), 'devlist.conf')
+        file = File.join(Dir.mktmpdir('tribble-test'), 'devlist.conf')
         File.write(file, devlist)
         @tmpdirs = (@tmpdirs || []) << File.dirname(file)
-        TribeControl::CLI.new
+        TribbleControl::CLI.new
                          .parse([ '-d', device, '-D', file, *argv, command ])
                          .tap {|cli| quieten(cli) }
     end
@@ -47,7 +47,7 @@ module DevlistHelper
     def refusal_for(devlist, *argv, **kws)
         cli_for(devlist, *argv, **kws)
         nil
-    rescue TribeControl::CLI::Error => e
+    rescue TribbleControl::CLI::Error => e
         e.message
     end
 

@@ -5,7 +5,7 @@ require 'rbconfig'
 require 'shellwords'
 require 'exsys/managed-usb'
 
-module TribeControl
+module TribbleControl
 
 #
 # Sysctl quick parsing
@@ -29,27 +29,22 @@ module FreeBSD
     # than absent.
     #
     # All three read /sys/bus/usb, which FreeBSD does not have, so
-    # --method usb -- and therefore 'connect', which has no other
-    # method -- has never worked on a FreeBSD host.  Leaving them
-    # undefined made that arrive as
+    # --method usb cannot work here.  They are stubbed rather than left
+    # undefined, because an undefined one arrives as
     #
     #     undefined method 'port_to_usb' for module
-    #     TribeControl::Platform::FreeBSD
+    #     TribbleControl::Platform::FreeBSD
     #
     # which names an internal and tells the reader nothing about what
-    # to do.  Only usb_to_serial used to be stubbed, while the comment
-    # above it claimed all three were; observed on FreeBSD 15 on
-    # 2026-09-17, 'connect' still died with the NoMethodError.  Each
-    # one now says which piece is missing and what still works.
-    # Which commands that leaves: the two that select with --method
-    # usb are out, and they are 'serial' and 'connect'.  Not 'serial
-    # works here', which the manual claimed until this was run on a
-    # FreeBSD host: 'serial' accepts the usb method and no other, so it
-    # reaches the same dead end 'connect' does.
+    # to do.  Each says instead which piece is missing and what still
+    # works -- and what still works is every command, because each of
+    # the two that DEFAULT to --method usb has a second method needing
+    # no USB topology at all: 'serial' takes --method power, 'connect'
+    # takes --method serial, and probe_consoles below answers both.
     LINUX_ONLY = 'is implemented for Linux only: it reads /sys/bus/usb,' \
                  ' which this host does not have.  usb, flash and reset' \
-                 ' work here; serial and connect do not, both selecting' \
-                 ' devices with --method usb'
+                 ' work here as they are; serial needs --method power,' \
+                 ' and connect needs --method serial'
 
     def self.port_to_usb(_port, root: nil)
         raise CLI::Error, "deriving a board's USB path from its hub port" \

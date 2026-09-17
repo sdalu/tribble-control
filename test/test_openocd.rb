@@ -67,7 +67,7 @@ class TestOpenocd < Minitest::Test
     # replaced.
     def test_a_missing_openocd_is_named_before_anything_runs
         c = cli_for("A1 { port = 1 }", '--openocd=/nonexistent/openocd')
-        e = assert_raises(TribeControl::CLI::Error) { c.openocd_path }
+        e = assert_raises(TribbleControl::CLI::Error) { c.openocd_path }
         assert_match(%r{openocd not found at '/nonexistent/openocd'}, e.message)
     end
 

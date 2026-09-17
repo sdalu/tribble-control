@@ -1,8 +1,8 @@
 .Dd September 17, 2026
-.Dt TRIBE-CONTROL 1
+.Dt TRIBBLE-CONTROL 1
 .Os
 .Sh NAME
-.Nm tribe-control
+.Nm tribble-control
 .Nd power, flash and monitor the devices on an ExSYS managed USB hub
 .Sh SYNOPSIS
 .Nm
@@ -23,9 +23,9 @@
 .Sh DESCRIPTION
 The hub switches VBUS on each port independently, driven over an FT232
 serial line.
-tribe\-control drives that line.
+tribble\-control drives that line.
 For a board on it that
-carries a debug probe, tribe\-control additionally speaks SWD through
+carries a debug probe, tribble\-control additionally speaks SWD through
 openocd and reads the board's console over USB CDC.
 Which probe and
 which chip a board needs is the devlist's business (interface= and
@@ -34,14 +34,14 @@ nRF52 today, and that is the default, not a requirement.
 Everything
 else on the hub is only an electrical load \(em see PROTECTED PORTS.
 .Bd -literal
-tribe\-control \-D devlist.conf flash zephyr.hex alpha beta
-stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off gamma epsilon \e
+tribble\-control \-D devlist.conf flash zephyr.hex alpha beta
+stdbuf \-oL tribble\-control \-D devlist.conf connect \-\-off gamma epsilon \e
     | tee twr.log
 .Ed
 .Pp
 It lives on the host owning the hub, alongside devlist.conf.
 It is a gem, so
-.Ic gem install tribe-control
+.Ic gem install tribble-control
 \(em from a built .gem, or
 .Ic rake install
 in a checkout \(em puts
@@ -52,13 +52,13 @@ A checkout with a vendored bundle works too, and is what a host that
 should not have gems installed system\-wide wants:
 .Ic bundle install --path vendor
 followed by
-.Ic bundle binstubs tribe-control
-writes bin/tribe\-control, which sets that bundle up before loading
+.Ic bundle binstubs tribble-control
+writes bin/tribble\-control, which sets that bundle up before loading
 anything.
 Run that one from the directory holding the bundle.
 .Sh THE HUB
 .Bd -literal
-the host running tribe\-control
+the host running tribble\-control
       │
       │  FT232R ──▸ /dev/ttyUSB0        the hub's control line.  It is
       │             9600 8N1            internal to the hub: it is NOT
@@ -104,7 +104,7 @@ Nothing on such a port communicates with
 the host, and the devlist records a name and a port, not what is plugged
 in.
 .Pp
-The host running tribe\-control is not powered from the hub, so no hub
+The host running tribble\-control is not powered from the hub, so no hub
 port can cut power to the machine you are typing on, and \-\-force is safe
 in that one narrow respect.
 .Pp
@@ -121,8 +121,8 @@ Global options come before the command; a command's own options come after
 the command but before its sub\-action.
 So:
 .Bd -literal
-tribe\-control \-D devlist.conf \-\-force usb off 14      global, then cmd
-tribe\-control \-D devlist.conf usb \-\-default=false set gamma:on
+tribble\-control \-D devlist.conf \-\-force usb off 14      global, then cmd
+tribble\-control \-D devlist.conf usb \-\-default=false set gamma:on
 .Ed
 .Pp
 and NOT 'usb set \-\-default=false ...', which parses the flag as an argument
@@ -188,7 +188,7 @@ An unwritable path is refused before any port is switched.
 .It Fl v , Fl -verbose , Fl -no-verbose
 Run verbosely.
 .It Fl V , Fl -version
-Print the tribe\-control and ExSYS library versions and exit.
+Print the tribble\-control and ExSYS library versions and exit.
 .It Fl h , Fl -help
 Usage, including the command list.
 .El
@@ -213,9 +213,8 @@ RD   restore factory defaults                         password
 RH   reset the whole hub                              password
 .Ed
 .Pp
-?Q answers a single string \(em CENTOS000516v02 on this bench, read off
-the hub on 2026\-09\-17: an id, then 16 for the port count and v02 for
-the firmware.
+?Q answers a single string: an id, then the port count, then the
+firmware version \(em CENTOS000516v02 on a 16\-port hub running v02.
 It carries no port states; cusba64 fills its On= and Off= display from
 a separate GP.
 .Pp
@@ -229,7 +228,7 @@ than reading it as every port.
 The default password is
 \&'pass', right\-padded to 8 characters.
 .Pp
-tribe\-control only ever issues SP, never FP or WP: port states are set for
+tribble\-control only ever issues SP, never FP or WP: port states are set for
 the here and now and never written to the hub's flash, so nothing it does
 survives a hub power cycle.
 Note also that RD, the only recovery from a
@@ -251,14 +250,14 @@ Two of these commands are worth fearing.
 RH resets the hub and RD
 restores factory defaults; either drops every port, which power\-cycles
 everything on the hub, reserved ports included.
-tribe\-control never
+tribble\-control never
 issues them, and the exsys gem only does so via #reset and
 #factory_reset, both of which require an explicit confirm: true.
 .Sh DEVLIST
 A UCL file mapping a device name to a hub port, and optionally to the
-board's CMSIS\-DAP serial number.
+board's debug\-probe serial number.
 It is what \-D/\-\-devlist points at, and it
-is the only thing that tells tribe\-control which ports it may touch.
+is the only thing that tells tribble\-control which ports it may touch.
 .Bd -literal
 undeclared = protect            # the default; see PROTECTED PORTS
 reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
@@ -304,7 +303,7 @@ aborts with "Device without serial".
 Fix it by running 'serial' (see
 RECIPES) and pasting the value in.
 .Pp
-Two optional keys describe a board whose probe or console differs from
+Optional keys describe a board whose probe or console differs from
 the default:
 .Bd -literal
 epsilon { serial = '000760040233', interface = jlink, baud = 115200,
@@ -318,7 +317,7 @@ The openocd interface script, without the .cfg:
 .Cm jlink
 (a J\-Link OB, as on the DWM1001\-DEV).
 Used by
-.Ic flash , reset , serial
+.Ic flash , reset
 and
 .Ic connect --reset .
 With
@@ -481,7 +480,7 @@ reserved = [ 13, 14, 15, 16 ]
 .Pp
 Together:
 .Bd -literal
-tribe\-control powers down a port only if the devlist allows it,
+tribble\-control powers down a port only if the devlist allows it,
 and never one the devlist reserves.
 .Ed
 .Pp
@@ -496,8 +495,8 @@ So a bare 'usb off' means "every switchable port", not "all 16".
 Naming a
 protected port is an error, not a silent skip:
 .Bd -literal
-$ tribe\-control \-D devlist.conf usb off 14
-tribe\-control: refusing to power down port(s) 14: not switchable,
+$ tribble\-control \-D devlist.conf usb off 14
+tribble\-control: refusing to power down port(s) 14: not switchable,
 being undeclared or reserved (use \-\-force)
 .Ed
 .Pp
@@ -549,8 +548,9 @@ only one powered \(em and is the fallback for a board whose serial= is
 missing or wrong.
 Slowest by far: every board costs a power cycle plus the warm\-up, so
 the whole bench is sequential rounds.
-It also leaves every declared board POWERED OFF when it finishes,
-because each port is switched off again after its turn.
+It also leaves every switchable declared board POWERED OFF when it
+finishes, because each port is switched off again after its turn.
+A board whose port the devlist protects stays powered, and says so.
 Run
 .Ic usb on
 afterwards to bring the bench back up.
@@ -617,7 +617,7 @@ Without \-\-force it is applied only to
 switchable ports, so it cannot sweep a reserved port off.
 \&'status' is read\-only: it asks the hub for its port states and prints
 every port with its device name, its state, and whether the devlist
-lets tribe\-control switch it.
+lets tribble\-control switch it.
 Run it before anything involving
 \-\-force.
 Note that 'usb on' does not wait out \-\-warm\-up; it returns as soon as
@@ -626,7 +626,7 @@ the hub acknowledges.
 Selection method: none.
 Exit status: 0, or 1 on error.
 .It Ic serial Oo Ar PORT | DEVNAME Oc ...
-Report each board's CMSIS\-DAP serial number, read from the USB
+Report each board's debug\-probe serial number, read from the USB
 descriptor the kernel already holds.
 Prints one line
 per board, "Serial for alpha: 1026...".
@@ -723,7 +723,7 @@ syslog, so it is not silenced by the compiled\-in level and costs the
 firmware less in a loop that is timing sensitive.
 It is sent once,
 to every selected board, on a separate write handle; the command is
-not echoed by tribe\-control, but the board's own echo and reply
+not echoed by tribble\-control, but the board's own echo and reply
 appear in the capture like any other output.
 Give it once \-\-
 repeating the option keeps only the last.
@@ -746,7 +746,7 @@ It is meant to be run through a terminal \(em 'bench connect' opens it
 over ssh \-t, which is what supplies the editing and the echo of the
 line being typed; a pipe works too, and sends what it is given.
 .Pp
-Selection method: usb only, so Linux only.
+Selection methods: usb (default), serial.
 Exit status:
 0, or 1 on error; nothing about what the boards did.
 .El
@@ -786,7 +786,7 @@ class TwrTally
     def summary = "ok=#{@ok}"
 end
 
-TribeControl::Tally.register(:twr) {|device| TwrTally.new(device) }
+TribbleControl::Tally.register(:twr) {|device| TwrTally.new(device) }
 .Ed
 .Pp
 The object the block returns needs two methods:
@@ -816,8 +816,8 @@ Read the serials of every board, to fill in the devlist.
 This cycles the
 bench and leaves it powered off:
 .Bd -literal
-tribe\-control \-D devlist.conf serial
-tribe\-control \-D devlist.conf usb on
+tribble\-control \-D devlist.conf serial
+tribble\-control \-D devlist.conf usb on
 .Ed
 .Pp
 Add a board on a new port.
@@ -827,7 +827,7 @@ mentions.
 Declare a stub first, then read the serial and fill it in:
 .Bd -literal
 echo "X1 { port = 11 }" >> devlist.conf
-tribe\-control \-D devlist.conf serial X1
+tribble\-control \-D devlist.conf serial X1
 .Ed
 .Pp
 Pick a port nothing else declares.
@@ -837,27 +837,27 @@ leaves the devlist unusable until it is edited back.
 .Pp
 Flash the whole bench, then just two boards:
 .Bd -literal
-tribe\-control \-D devlist.conf flash zephyr.hex
-tribe\-control \-D devlist.conf flash zephyr.hex alpha beta
+tribble\-control \-D devlist.conf flash zephyr.hex
+tribble\-control \-D devlist.conf flash zephyr.hex alpha beta
 .Ed
 .Pp
 Flash in parallel, leaving the bench powered.
 Needs a serial for every
 board named, so fix the gaps first (see DEVLIST):
 .Bd -literal
-tribe\-control \-D devlist.conf \-\-method serial flash zephyr.hex
+tribble\-control \-D devlist.conf \-\-method serial flash zephyr.hex
 .Ed
 .Pp
 Run a ranging capture to a log, for ten minutes:
 .Bd -literal
-stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off gamma epsilon \e
+stdbuf \-oL tribble\-control \-D devlist.conf connect \-\-off gamma epsilon \e
     | tee twr.log
 .Ed
 .Pp
 Find out why a board is silent \(em capture its boot, including the driver
 init lines, for one minute:
 .Bd -literal
-stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off \-\-reset \e
+stdbuf \-oL tribble\-control \-D devlist.conf connect \-\-off \-\-reset \e
     \-\-duration=60 gamma beta | tee boot.log
 .Ed
 .Pp
@@ -865,14 +865,14 @@ Capture ranging results from a stock redskin build.
 Without the command
 the log level hides them and the SUMMARY reads ok=0 / tx\-rate=NaN:
 .Bd -literal
-stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off \-\-reset \e
+stdbuf \-oL tribble\-control \-D devlist.conf connect \-\-off \-\-reset \e
     \-\-command='spank syslog info' \-\-duration=60 gamma beta | tee twr.log
 .Ed
 .Pp
 Power\-cycle one board without disturbing the others:
 .Bd -literal
-tribe\-control \-D devlist.conf usb off gamma && sleep 2 && \e
-tribe\-control \-D devlist.conf usb on  gamma
+tribble\-control \-D devlist.conf usb off gamma && sleep 2 && \e
+tribble\-control \-D devlist.conf usb on  gamma
 .Ed
 .Pp
 Deliberately reboot a device on a reserved port (the only case for
@@ -880,15 +880,15 @@ Deliberately reboot a device on a reserved port (the only case for
 This is a hard power cut; shut the device down over the
 network first:
 .Bd -literal
-tribe\-control \-D devlist.conf \-\-force usb off 14 && sleep 2 && \e
-tribe\-control \-D devlist.conf usb on 14
+tribble\-control \-D devlist.conf \-\-force usb off 14 && sleep 2 && \e
+tribble\-control \-D devlist.conf usb on 14
 .Ed
 .Pp
 Flash from a script, failing the build if any board failed:
 .Bd -literal
 #!/bin/sh
 cd /root || exit 1
-exec tribe\-control \-D devlist.conf flash zephyr.hex
+exec tribble\-control \-D devlist.conf flash zephyr.hex
 .Ed
 .Sh TRAPS
 Exit status.
@@ -899,11 +899,12 @@ that, flash, reset and serial exit 1 when they ran to completion but some
 board failed; usb and connect report nothing about the work itself, so a
 0 from 'connect' says only that it started.
 Beware that piping into
-\&'tee' hands you tee's status, not tribe\-control's \(em which is exactly
+\&'tee' hands you tee's status, not tribble\-control's \(em which is exactly
 what the capture recipe does, so do not use that shape in a script
 without a pipefail or a temporary file.
 .Pp
-\-\-method power leaves every declared board powered off when it finishes.
+\-\-method power leaves every switchable declared board powered off when
+it finishes.
 Nothing defaults to it any more: flash defaults to serial, reset is
 serial only, and serial and connect default to usb.
 You get it by asking
@@ -924,12 +925,10 @@ Check which tally the board is using
 and that the firmware is logging at all before concluding the radio is
 dead; \-\-command is how a log level is raised at run time.
 .Pp
-\-\-debug used to do nothing at all.
-The logger was built at debug level, so the openocd command lines the
-flag exists to reveal were printed on every run whether it was given or
-not, and the FILE it documented was accepted and dropped.
-Both are fixed: the default is quiet, \-\-debug is what makes it
-verbose, and \-\-debug=FILE also writes the log where it says.
+\-\-debug is what makes a run verbose; the default is quiet.
+What it exists to reveal is the openocd command line issued for each
+board.
+\-\-debug=FILE also writes the log where it says.
 If you have a script that greps a run for its openocd invocations, it
 now has to ask for them.
 .Pp
@@ -952,8 +951,6 @@ the console is found by the serial of the probe in front of the board,
 which both a DAPLink and a J\-Link OB report, and which the devlist
 already carries in order to address that board for flashing.
 No USB tree is walked, so nothing in that path is Linux\-only.
-Measured on FreeBSD 15 against an nRF52840 on 2026\-09\-17: console
-opened, Zephyr shell read, lines counted.
 .Pp
 .Ic serial
 works there too, with

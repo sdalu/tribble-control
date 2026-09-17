@@ -1,8 +1,8 @@
-require_relative 'lib/tribe-control/version'
+require_relative 'lib/tribble-control/version'
 
 Gem::Specification.new do |spec|
-    spec.name        = 'tribe-control'
-    spec.version     = TribeControl::VERSION
+    spec.name        = 'tribble-control'
+    spec.version     = TribbleControl::VERSION
     spec.authors     = [ "Stephane D'Alu" ]
     spec.email       = [ 'sdalu@sdalu.com' ]
 
@@ -18,7 +18,7 @@ Gem::Specification.new do |spec|
     DESC
 
     spec.license     = 'MIT'
-    spec.homepage    = 'https://github.com/sdalu/trible-control'
+    spec.homepage    = 'https://github.com/sdalu/tribble-control'
 
     # This gem drives one bench.  It is installed from a checkout, not
     # fetched, and `gem push` on it would be an accident.
@@ -34,21 +34,21 @@ Gem::Specification.new do |spec|
     # directory: RubyGems reads the listed paths relative to the cwd,
     # not to the gemspec, so building from elsewhere fails however this
     # list is written.  What the chdir fixes is which failure you get.
-    # Without it the globs came back empty and the error named only the
-    # four literal paths -- a message about README.md and LICENSE for a
-    # build that had quietly dropped the entire library.  With it the
-    # error names all sixteen, which reads as what it is.
+    # Without it the globs come back empty and the error names only the
+    # literal paths -- a message about README.md and LICENSE for a build
+    # that has quietly dropped the entire library.  With it the error
+    # names every file, which reads as what it is.
     #
     # man/man1/ keeps its shape inside the installed gem, which makes
     # the gem's man/ a usable MANPATH entry.  See `rake man:install`.
     spec.files       = Dir.chdir(__dir__) {
                            Dir['lib/**/*.rb'] +
                            Dir['man/man1/*.1'] + Dir['examples/*'] +
-                           [ 'README.md', 'LICENSE',
-                             'tribe-control.gemspec' ]
+                           [ 'README.md', 'DESIGN.md', 'LICENSE',
+                             'tribble-control.gemspec' ]
                        }
     spec.bindir      = 'exe'
-    spec.executables = [ 'tribe-control' ]
+    spec.executables = [ 'tribble-control' ]
 
     # 1.0 or better.  0.6 gave ManagedUSB an exclusive lock on the
     # serial line across a whole read-modify-write; 1.0 makes that

@@ -21,10 +21,10 @@ namespace :test do
     desc 'Run the regression suite against the copy deployed on a hub host'
     task :bench do
         # It refuses to start without a host: one lab's address does not
-        # belong in the repository.  TRIBE_HOST or the first argument.
-        sh 'sh', 'test/test-tribe-control',
-           ENV.fetch('TRIBE_HOST', ''), ENV.fetch('TRIBE_PATH', ''),
-           ENV.fetch('TRIBE_TALLY', '')
+        # belong in the repository.  TRIBBLE_HOST or the first argument.
+        sh 'sh', 'test/test-tribble-control',
+           ENV.fetch('TRIBBLE_HOST', ''), ENV.fetch('TRIBBLE_PATH', ''),
+           ENV.fetch('TRIBBLE_TALLY', '')
     end
 
     desc 'Both: what runs anywhere, then what needs the bench'
@@ -33,16 +33,16 @@ end
 
 # RubyGems has no notion of a man page: `gem install` copies the file
 # into the gem directory and stops there, so nothing makes `man
-# tribe-control` work by itself.  Two ways out, neither of them magic:
+# tribble-control` work by itself.  Two ways out, neither of them magic:
 #
-#   * `tribe-control --man` renders the shipped page in place, needing
+#   * `tribble-control --man` renders the shipped page in place, needing
 #     no install and no privileges.  That is the one the bench uses.
 #   * this task, for a host that wants the real thing.
 #
 # A third, for a one-off: the page ships at man/man1/ inside the gem, so
 #
-#     MANPATH=$(gem contents tribe-control | sed -n 's,/man/man1/.*,/man,p' | head -1) \
-#         man tribe-control
+#     MANPATH=$(gem contents tribble-control | sed -n 's,/man/man1/.*,/man,p' | head -1) \
+#         man tribble-control
 #
 # works with nothing copied anywhere.
 namespace :man do
@@ -51,17 +51,17 @@ namespace :man do
         prefix = ENV.fetch('PREFIX', '/usr/local')
         dir    = File.join(prefix, 'share', 'man', 'man1')
         mkdir_p dir
-        install 'man/man1/tribe-control.1', dir, :mode => 0o644
+        install 'man/man1/tribble-control.1', dir, :mode => 0o644
     end
 
     desc 'Render the man page as it will be read'
     task :show do
-        sh 'mandoc', '-Tutf8', 'man/man1/tribe-control.1'
+        sh 'mandoc', '-Tutf8', 'man/man1/tribble-control.1'
     end
 
     desc 'Check the man page for roff errors'
     task :lint do
-        sh 'mandoc', '-Tlint', 'man/man1/tribe-control.1'
+        sh 'mandoc', '-Tlint', 'man/man1/tribble-control.1'
     end
 end
 
