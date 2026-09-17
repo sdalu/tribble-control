@@ -1,0 +1,908 @@
+.Dd September 17, 2026
+.Dt TRIBE-CONTROL 1
+.Os
+.Sh NAME
+.Nm tribe-control
+.Nd power, flash and monitor the devices on an ExSYS managed USB hub
+.Sh SYNOPSIS
+.Nm
+.Op Fl d Ar DEV
+.Op Fl D Ar FILE
+.Op Fl m Ar TYPE
+.Op Fl W Ar SECONDS
+.Op Fl p Ar STRING
+.Op Fl -openocd Ar PATH
+.Op Fl F
+.Op Fl v
+.Op Fl -debug Ns Oo = Ns Ar FILE Oc
+.Ar command
+.Op command options
+.Op Ar PORT | DEVNAME ...
+.Nm
+.Fl -man | -help | -version
+.Sh DESCRIPTION
+The hub switches VBUS on each port independently, driven over an FT232
+serial line.
+tribe\-control drives that line.
+For a board on it that
+carries a debug probe, tribe\-control additionally speaks SWD through
+openocd and reads the board's console over USB CDC.
+Which probe and
+which chip a board needs is the devlist's business (interface= and
+target=), so the family it belongs to is not built in; the bench is
+nRF52 today, and that is the default, not a requirement.
+Everything
+else on the hub is only an electrical load \(em see PROTECTED PORTS.
+.Bd -literal
+tribe\-control \-D devlist.conf flash zephyr.hex alpha beta
+stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off gamma epsilon \e
+    | tee twr.log
+.Ed
+.Pp
+It lives on the host owning the hub, alongside devlist.conf.
+It is a gem, so
+.Ic gem install tribe-control
+\(em from a built .gem, or
+.Ic rake install
+in a checkout \(em puts
+.Nm
+on PATH with its dependencies and needs nothing further.
+.Pp
+A checkout with a vendored bundle works too, and is what a host that
+should not have gems installed system\-wide wants:
+.Ic bundle install --path vendor
+followed by
+.Ic bundle binstubs tribe-control
+writes bin/tribe\-control, which sets that bundle up before loading
+anything.
+Run that one from the directory holding the bundle.
+.Sh THE HUB
+.Bd -literal
+the host running tribe\-control
+      │
+      │  FT232R ──▸ /dev/ttyUSB0        the hub's control line.  It is
+      │             9600 8N1            internal to the hub: it is NOT
+      ▾                                 one of the 16 switched sockets.
+┌───────────────────────────────────────────────────────────────────┐
+│                   ExSYS 16\-port managed USB hub                   │
+│                                                                   │
+│    bank 1          bank 2          bank 3          bank 4         │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
+│  │  1       │    │  5       │    │  9       │    │ 13       │     │
+│  │  2       │    │  6       │    │ 10       │    │ 14       │     │
+│  │  3       │    │  7       │    │ 11       │    │ 15       │     │
+│  │  4       │    │  8       │    │ 12       │    │ 16       │     │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
+└───────────────────────────────────────────────────────────────────┘
+    Sixteen independently switched sockets.  What is on each is the
+    devlist's business, not this diagram's: a socket may carry a board
+    the tool drives over SWD, or something it only powers and never
+    talks to, or nothing at all.  Sockets in the second class are what
+    PROTECTED PORTS exists for.
+.Ed
+.Pp
+Ports are numbered 1 to 16 across four internal banks of four.
+These are
+the hub's own numbers, the ones the devlist and every command use; whether
+the sockets are silkscreened that way is another matter, so count banks
+left to right and sockets top to bottom if you are looking for one by hand.
+.Pp
+The FT232 control adapter enumerates at the last position of the hub's
+internal tree (USB path 1\-1.2.4.4), which makes it look as though it
+occupies port 16.
+It does not: it is wired inside the hub and is not
+switched.
+Port 16 is an ordinary socket like the other fifteen.
+The one
+consequence is that a board must never be put on port 16: \-\-method usb
+would compute the path 1\-1.2.4.4 for it and address the FT232 instead.
+.Pp
+A port that only supplies power tells the tool nothing about what is on
+it, so if you need to reboot one device in particular, establish which
+socket it is physically first.
+Nothing on such a port communicates with
+the host, and the devlist records a name and a port, not what is plugged
+in.
+.Pp
+The host running tribe\-control is not powered from the hub, so no hub
+port can cut power to the machine you are typing on, and \-\-force is safe
+in that one narrow respect.
+.Pp
+Requirements: Ruby 3.1, and openocd \(em everything that reaches a
+board over SWD shells out to it.
+The Ruby dependencies come with the gem; openocd does not, being no
+gem of anybody's.
+It is expected at /usr/bin/openocd and found elsewhere with
+\-\-openocd; flash and reset check for it before switching anything, and
+connect \-\-reset when it reaches for it.
+.Sh OPTIONS
+Ordering matters, and it is the thing most likely to waste your afternoon.
+Global options come before the command; a command's own options come after
+the command but before its sub\-action.
+So:
+.Bd -literal
+tribe\-control \-D devlist.conf \-\-force usb off 14      global, then cmd
+tribe\-control \-D devlist.conf usb \-\-default=false set gamma:on
+.Ed
+.Pp
+and NOT 'usb set \-\-default=false ...', which parses the flag as an argument
+to 'set' and fails with "invalid argument".
+.Pp
+Global options, which go before the command:
+.Bl -tag -width "-W, --warm-up=SECONDS"
+.It Fl d , Fl -device Ns = Ns Ar DEV
+Serial line to the hub.
+Auto\-detected on Linux by looking for an FTDI 0403:6001; normally
+/dev/ttyUSB0.
+Pass it explicitly if you have more than one FTDI adapter attached.
+.It Fl D , Fl -devlist Ns = Ns Ar FILE
+The device list.
+Required for any power\-down at all, and by any command taking device
+names.
+.Ic usb on
+and
+.Ic usb status
+work without it.
+.It Fl m , Fl -method Ns = Ns Ar TYPE
+Device selection:
+.Cm power , usb
+or
+.Cm serial .
+See
+.Sx DEVICE SELECTION .
+Rejected if the command does not support it.
+.It Fl W , Fl -warm-up Ns = Ns Ar SECONDS
+Delay after powering a port on, before touching the board.
+Default 5.
+.It Fl F , Fl -force
+Switch ports the devlist does not allow.
+See
+.Sx PROTECTED PORTS .
+.It Fl p , Fl -password Ns = Ns Ar STRING
+Supplies the hub password; it does not change it.
+Default
+.Sq pass .
+A wrong one makes the hub answer E01 and the command abort loudly, not
+silently.
+.It Fl r , Fl -require Ns = Ns Ar FILE Ns Op , Ns Ar FILE ...
+Ruby files to load before anything else runs, for the tallies they
+register.
+See
+.Sx TALLIES .
+.It Fl -openocd Ns = Ns Ar PATH
+openocd binary.
+Default /usr/bin/openocd; a name with no
+.Sq /
+in it is looked up in PATH, which is how to reach it on a host that
+keeps it elsewhere (FreeBSD: /usr/local/bin).
+Checked before any port is switched, by the commands that always need
+it.
+.It Fl -debug Ns Oo = Ns Ar FILE Oc
+Raise the log level to debug.
+The
+.Ar FILE
+argument is accepted and ignored.
+.It Fl v , Fl -verbose , Fl -no-verbose
+Run verbosely.
+.It Fl V , Fl -version
+Print the tribe\-control and ExSYS library versions and exit.
+.It Fl h , Fl -help
+Usage, including the command list.
+.El
+.Pp
+Per\-command: 'usb' takes \-\-default=BOOL, 'connect' takes \-\-off.
+Both are
+described under COMMANDS.
+.Sh "HUB PROTOCOL, AND WHAT IT CANNOT TELL YOU"
+The hub speaks a small ASCII protocol over the FT232 line.
+Recovered from
+the vendor's own cusba64 binary (which ships unstripped), the complete
+vocabulary is eight commands, each terminated by CR, answering 'G...' on
+success and 'E01' on error:
+.Bd -literal
+?Q   query: an id, the port count and the firmware   no password
+GP   get port states                                  no password
+SP   set port states                                  password
+FP   set port states, and save as the power\-on state  password
+WP   save the current states as the power\-on state    password
+CP   change password                                  password
+RD   restore factory defaults                         password
+RH   reset the whole hub                              password
+.Ed
+.Pp
+?Q answers a single string \(em CENTOS000516v02 on this bench, read off
+the hub on 2026\-09\-17: an id, then 16 for the port count and v02 for
+the firmware.
+It carries no port states; cusba64 fills its On= and Off= display from
+a separate GP.
+.Pp
+The exsys gem implements all of these except ?Q, and as of 0.6 holds
+an exclusive lock on the line for the whole of a read\-modify\-write,
+so two processes cannot lose each other's changes between the GP and
+the SP.
+The default password is
+\&'pass', right\-padded to 8 characters.
+.Pp
+tribe\-control only ever issues SP, never FP or WP: port states are set for
+the here and now and never written to the hub's flash, so nothing it does
+survives a hub power cycle.
+Note also that RD, the only recovery from a
+forgotten password, drops every port \(em so changing the password with CP
+is close to a one\-way door on a hub carrying anything that minds losing
+power without notice.
+.Pp
+There is no per\-port current or voltage telemetry, and no way to bolt it
+on: the protocol has no such command, cusba64 contains no such code, and
+USB 2.x/3.x hubs do not report per\-port draw to the host under any
+circumstances.
+A device's bMaxPower descriptor is what it asks for at
+enumeration, not what it consumes, and a pure power load never enumerates
+at all.
+Measuring consumption needs an inline USB power meter or an
+instrumented bench supply.
+.Pp
+Two of these commands are worth fearing.
+RH resets the hub and RD
+restores factory defaults; either drops every port, which power\-cycles
+everything on the hub, reserved ports included.
+tribe\-control never
+issues them, and the exsys gem only does so via #reset and #restore.
+.Sh DEVLIST
+A UCL file mapping a device name to a hub port, and optionally to the
+board's CMSIS\-DAP serial number.
+It is what \-D/\-\-devlist points at, and it
+is the only thing that tells tribe\-control which ports it may touch.
+.Bd -literal
+undeclared = protect            # the default; see PROTECTED PORTS
+reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
+
+alpha   { serial = '1026360216055e5b0000...97969902', port = 1    }
+beta    {                                             port = 2    }
+gamma   { serial = '1026360213072dde0000...97969902', port = 4    }
+retired { serial = '1026360202c4dc0f0000...97969902', port = none }
+.Ed
+.Pp
+Indentation is not significant, but separators are: two keys on one line
+need a comma between them, which is why the entries above carry one and
+one\-key\-per\-line entries do not.
+A CMSIS\-DAP serial is 48 hex
+characters and a J\-Link one 12, and both are pasted whole \(em the ones
+above are elided in the middle for width.
+.Pp
+Every device entry must carry a port, and 'port = none' is how one says it
+is a record rather than a board on the bench.
+\&'retired' above is the
+case: it stopped enumerating, its port was given to another board, and the
+entry stays so that its serial is not lost.
+Such an entry is left out of
+everything \(em never selected, never switched, never flashed \(em and naming
+it says so ("device 'retired' is not on the bench").
+A MISSING port is an
+error, not a synonym for none: deleting the port line is exactly what
+happens when a port is reassigned, and inferring "gone" from a line
+somebody forgot would drop a live board silently.
+Two entries claiming
+one port is refused at load, none excepted.
+.Pp
+Every key other than 'reserved', 'undeclared' and 'tally' is a device.
+A command
+given no device names operates on all of them.
+Names may be used anywhere
+a port number can be, in every command.
+.Pp
+A board with no serial= cannot be reached by 'reset' or by \-\-method
+serial, both of which address a board by its serial number: the run
+aborts with "Device without serial".
+Fix it by running 'serial' (see
+RECIPES) and pasting the value in.
+.Pp
+Two optional keys describe a board whose probe or console differs from
+the default:
+.Bd -literal
+epsilon { serial = '000760040233', interface = jlink, baud = 115200,
+          port = 7 }
+.Ed
+.Bl -tag -width power_cycle
+.It Cm interface
+The openocd interface script, without the .cfg:
+.Cm cmsis-dap
+(the default, a DAPLink probe such as the MDK's) or
+.Cm jlink
+(a J\-Link OB, as on the DWM1001\-DEV).
+Used by
+.Ic flash , reset , serial
+and
+.Ic connect --reset .
+With
+.Cm jlink ,
+serial= is the J\-Link serial number as udev reports it; leading zeros
+are accepted.
+.It Cm target
+The openocd target script, without the .cfg:
+.Cm nrf52
+(the default, which is what the whole bench runs) or whatever openocd
+calls the chip on a board of another family.
+Used wherever interface= is.
+The two are independent: the probe says how to reach the chip, the
+target says which chip it is.
+.It Cm baud
+The console speed
+.Ic connect
+opens, default 230400 (what the MDK overlay sets).
+The stock DWM1001\-DEV devicetree runs its console at 115200.
+.It Cm tally
+Which tally reads this board's console, overriding the file's own
+.Cm tally
+line.
+See
+.Sx TALLIES .
+.It Cm power_cycle
+The moments at which the board must have its port powered off and on
+again: one name, or a list of them.
+Known:
+.Bl -tag -width after-flash
+.It Cm after-flash
+After a successful flash.
+The DWM1001\-DEV needs it: after openocd's reset init / write / reset
+run its DW1000 no longer reports transmissions (the board resolves
+nothing and logs "our TX timestamps are missing") until the module is
+power\-cycled; a plain SWD reset is not enough.
+.El
+.Pp
+A name nothing acts on is not an error, so a new moment can be recorded
+here before the command that honours it exists.
+It lives here, and not only as the
+.Ic flash --power-cycle
+option, so that a flash by hand on the hub cannot forget it.
+.El
+.Pp
+\&'reserved' lists ports that must never be powered down.
+\&'undeclared' says what to do with every port the file does not
+mention.
+Both are described under
+.Sx PROTECTED PORTS .
+\&'tally' sets the bench's default tally, described under
+.Sx TALLIES .
+.Pp
+A misspelled 'reserverd' becomes a device named reserverd, which would
+silently unprotect every reserved port.
+That one is now caught: every
+device entry must carry a port, so the misspelling is refused at load
+with "devlist entry 'reserverd' has no port".
+Validation stops there,
+though \(em a serial, an interface or a baud that is wrong is wrong
+silently \(em so after editing this file still run 'usb status' and read
+the names and the protected column before you trust it.
+.Sh PROTECTED PORTS
+Some things on the hub are there for power alone: a single\-board computer,
+a powered peripheral, anything the bench feeds but does not drive.
+Nothing
+communicates with them, so nothing notices if their VBUS disappears \(em they
+simply reboot, uncleanly, mid\-write.
+Two devlist keys keep that from
+happening.
+.Pp
+\&'undeclared' decides the fate of every port the devlist does not mention:
+.Bl -tag -width "undeclared = protect"
+.It Li "undeclared = protect"
+The default.
+Only ports declared in the devlist may be powered down.
+.It Li "undeclared = switch"
+Any of the 16 may be powered down.
+.El
+.Pp
+\&'reserved' names ports that are never powered down whichever mode is in
+force, so it protects a port even when that port is a declared device:
+.Bd -literal
+reserved = [ 13, 14, 15, 16 ]
+.Ed
+.Pp
+Together:
+.Bd -literal
+tribe\-control powers down a port only if the devlist allows it,
+and never one the devlist reserves.
+.Ed
+.Pp
+This is enforced at every path that can cut power, not just the obvious
+one: 'usb off', 'usb toggle', 'usb set' with a port set to off, the
+all\-ports\-off that begins \-\-method power, and 'connect \-\-off'.
+You do not
+have to reason about which commands are dangerous; they all go through the
+same gate.
+.Pp
+So a bare 'usb off' means "every switchable port", not "all 16".
+Naming a
+protected port is an error, not a silent skip:
+.Bd -literal
+$ tribe\-control \-D devlist.conf usb off 14
+tribe\-control: refusing to power down port(s) 14: not switchable,
+being undeclared or reserved (use \-\-force)
+.Ed
+.Pp
+Without a devlist there is no safe set, so power\-down is refused outright.
+.Pp
+\-F/\-\-force lifts both rules and restores the old "all 16 ports" behaviour.
+It is the only way to deliberately reboot a power\-only device, and it is a
+hard VBUS cut, not a shutdown: the device loses power mid\-write, with
+whatever consequences that has for its filesystem.
+Shut it down over the
+network first if you care about what is on it.
+It cannot strand you,
+though \(em the host runs off its own supply, not off the hub.
+.Pp
+Powering *on* is never guarded: 'usb on' with no arguments still turns on
+all 16 ports, which is the state the bench should normally sit in.
+.Sh DEVICE SELECTION
+Flashing one of six identical boards means telling openocd which one.
+There are three ways, chosen with \-m/\-\-method:
+.Bd -literal
+┌─────────┬─────────────────┬──────────────┬────────────────────────┐
+│ method  │ addresses a     │ requires     │ power while the job    │
+│         │ board by        │              │ runs                   │
+├─────────┼─────────────────┼──────────────┼────────────────────────┤
+│ serial  │ its debug probe │ serial= for  │ every declared port    │
+│         │ serial number   │ every board  │ on; boards in parallel │
+├─────────┼─────────────────┼──────────────┼────────────────────────┤
+│ usb     │ its USB path,   │ Linux (not   │ every declared port    │
+│         │ root.bank.slot  │ FreeBSD)     │ on; boards in sequence │
+├─────────┼─────────────────┼──────────────┼────────────────────────┤
+│ power   │ being the only  │ nothing      │ exactly one board at   │
+│         │ board powered   │              │ a time, rest cut       │
+└─────────┴─────────────────┴──────────────┴────────────────────────┘
+.Ed
+.Pp
+Which to use:
+.Bl -tag -width serial
+.It Cm serial
+The default for
+.Ic flash
+and
+.Ic reset .
+Boards stay powered and are done in parallel, so it is much faster and
+far less disruptive.
+Aborts if any selected board lacks a serial=.
+.It Cm power
+Needs no configuration at all \(em it identifies a board by being the
+only one powered \(em and is the fallback for a board whose serial= is
+missing or wrong.
+Slowest by far: every board costs a power cycle plus the warm\-up, so
+the whole bench is sequential rounds.
+It also leaves every declared board POWERED OFF when it finishes,
+because each port is switched off again after its turn.
+Run
+.Ic usb on
+afterwards to bring the bench back up.
+.It Cm usb
+What
+.Ic connect
+uses.
+Addresses by USB topology, so it needs no serials, but it is
+Linux\-only.
+.El
+.Pp
+Each command accepts only the methods that make sense for it, and uses the
+first as its default:
+.Bd -literal
+command    methods accepted          default
+\-\-\-\-\-\-\-    \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-          \-\-\-\-\-\-\-
+usb        (none: acts on ports)     n/a
+serial     usb                       usb
+flash      serial, power             serial
+reset      serial                    serial
+connect    usb                       usb
+.Ed
+.Pp
+\-\-method usb derives the board's USB location from the hub's own geometry,
+four banks of four:
+.Bd -literal
+port 5 ─┬─▸ bank 2      bank is (port minus 1) div 4, plus 1
+        └─▸ slot 1      slot is (port minus 1) mod 4, plus 1
+
+hub root path .............  1\-1.2
+openocd adapter usb location 1\-1.2.2.1
+                             └───┘ │ │
+                               │   │ └── slot
+                               │   └──── bank
+                               └──────── hub root
+.Ed
+.Pp
+The location is documentation of intent rather than a selector: openocd
+0.12 ignores 'adapter usb location' for CMSIS\-DAP, reaching the same
+adapter whichever path it is given, including one that does not exist.
+What selects is 'adapter serial', which this method passes as well
+whenever the devlist has one.
+A board with no serial= is therefore
+addressed by nothing in particular, and with more than one adapter
+powered that is a board chosen at random.
+.Pp
+After any power\-on, \-W/\-\-warm\-up seconds (default 5) pass before the boards
+are touched, to let them enumerate.
+.Sh COMMANDS
+Every command takes device names or port numbers interchangeably, and
+operates on all declared devices when given neither.
+.Bl -tag -width Ds
+.It Ic usb Cm status | on | off | toggle | set Oo Ar PORT | DEVNAME Oc ...
+Drive hub port power directly.
+\&'set' takes PORT:STATE pairs, where
+STATE is any of on/off/1/0/true/false/t/f.
+With no arguments, 'on'
+means all 16 ports, while 'off' and 'toggle' mean every switchable
+port (see PROTECTED PORTS).
+.Pp
+\-\-default=BOOL sets what happens to ports 'set' does not name; it goes
+before the word 'set'.
+Without \-\-force it is applied only to
+switchable ports, so it cannot sweep a reserved port off.
+\&'status' is read\-only: it asks the hub for its port states and prints
+every port with its device name, its state, and whether the devlist
+lets tribe\-control switch it.
+Run it before anything involving
+\-\-force.
+Note that 'usb on' does not wait out \-\-warm\-up; it returns as soon as
+the hub acknowledges.
+.Pp
+Selection method: none.
+Exit status: 0, or 1 on error.
+.It Ic serial Oo Ar PORT | DEVNAME Oc ...
+Report each board's CMSIS\-DAP serial number, by running openocd and
+reading the USB descriptor the kernel already holds.
+Prints one line
+per board, "Serial for alpha: 1026...".
+Use it to populate the devlist.
+.Pp
+Selection method: usb only, so Linux only.
+It powers the boards' own
+ports up and leaves the rest of the bench alone \(em asking a board its
+serial is not a reason to black out the hub.
+Exit status: 1 if any
+board could not be read.
+.Pp
+The serial comes from the operating system rather than from openocd,
+which does not report it: openocd 0.12 prints neither a CMSIS\-DAP
+"Serial# =" line nor a J\-Link "S/N" one, at any debug level.
+Asking
+the OS also means no board has to be the only one powered, which
+asking openocd would have required, since it cannot choose between
+adapters by itself.
+.It Ic flash Ar FIRMWARE Oo Ar PORT | DEVNAME Oc ...
+openocd 'flash write_image erase FIRMWARE' then 'reset run', against
+the board's target= script (nrf52 by default) over its interface=
+script (cmsis\-dap by default) with SWD.
+FIRMWARE is resolved by
+openocd relative to the current directory.
+Every selected board is attempted even if an earlier one failed; the
+exit status reflects the whole run.
+A board whose devlist entry lists after\-flash under power_cycle (see
+DEVLIST: the DWM1001\-DEV) has its port powered off and on again after
+a successful flash; \-\-power\-cycle, before FIRMWARE, does the same for
+any board.
+.Pp
+Selection methods: serial (default), power.
+Exit status: 1 if any
+board failed.
+.It Ic reset Oo Ar PORT | DEVNAME Oc ...
+openocd 'reset run'.
+.Pp
+Selection method: serial only, so it cannot address a board that has
+no serial= in the devlist.
+Exit status: 1 if any board failed.
+.It Ic connect Oo Ar PORT | DEVNAME Oc ...
+Open each board's CDC console at its baud= (default 230400) and
+stream it, prefixing every line with <DEVNAME>.
+Every line is also handed to the board's tally, and on exit each board
+prints a SUMMARY line with whatever that tally has to say.
+What the lines MEAN is not decided here \(em see
+.Sx TALLIES .
+.Pp
+Boards are streamed concurrently, one thread each, which is what
+makes a two\-way\-ranging capture meaningful; the "in sequence" in the
+method table above describes the order boards are set up in, not the
+monitoring.
+.Pp
+\-\-off powers down every declared board first, for a clean start \-\-
+every declared board, not only the ones named on the command line \-\-
+and then powers the selected ones back up.
+.Pp
+\-\-reset resets each board over SWD once its console is open.
+Without
+it you see only what a board says from the moment the reader attaches,
+which on an already\-running board is nothing at all until the next
+ranging exchange: the banner and the driver's init lines \(em including
+any "Failed to initialize" \(em were printed seconds after power\-on and
+are gone.
+Use it whenever you care about why a board is quiet, and
+note that \-\-off alone does NOT substitute: the port is powered back up
+before the console is opened, so boot output still escapes.
+.Pp
+\-\-duration=SECONDS bounds the capture; the default is 600.
+.Pp
+\-\-command=CMD types CMD at each board's shell once it is up (two
+seconds after a \-\-reset, half a second otherwise) and is the way to
+reach anything the firmware gates behind a run\-time setting.
+The
+case it exists for: redskin compiles spank's log level to warning,
+but the ranging results are logged at info, so a capture counts zero
+exchanges on a bench that is in fact working perfectly \-\-
+.Bd -literal
+\-\-command='spank syslog info'      # the whole info stream
+\-\-command='spank report all'       # just the distances, cheaper
+.Ed
+.Pp
+turns them on without reflashing.
+Prefer the second: the report path
+is written straight out by the port instead of going through the
+syslog, so it is not silenced by the compiled\-in level and costs the
+firmware less in a loop that is timing sensitive.
+It is sent once,
+to every selected board, on a separate write handle; the command is
+not echoed by tribe\-control, but the board's own echo and reply
+appear in the capture like any other output.
+Give it once \-\-
+repeating the option keeps only the last.
+ALWAYS run it under 'stdbuf \-oL' if you are piping the output
+anywhere.
+Without that, the pipe buffers in 4 KB blocks and 'tee'
+shows nothing for minutes.
+.Pp
+\-\-interactive is \-\-command without the limit of one command decided
+in advance: standard input is forwarded to the board, a line at a
+time, and the console stays open until end of input instead of for
+a \-\-duration.
+One device only \(em there is one standard input, and
+two boards sharing it could not be told apart or addressed
+separately.
+What the board replies appears in the stream like
+anything else, prefixed with its name, so what was typed and what
+came back read in order.
+It is meant to be run through a terminal \(em 'bench connect' opens it
+over ssh \-t, which is what supplies the editing and the echo of the
+line being typed; a pipe works too, and sends what it is given.
+.Pp
+Selection method: usb only, so Linux only.
+Exit status:
+0, or 1 on error; nothing about what the boards did.
+.El
+.Sh TALLIES
+.Nm
+opens a board's console, prefixes each line with the board's name and
+prints it.
+What a line MEANS it does not know, and deliberately does not: the
+strings worth counting belong to whatever firmware is on the bench this
+month, they change when that firmware changes, and none of them are
+facts about a USB hub.
+.Pp
+A tally is where that knowledge goes.
+.Ic connect
+hands it every line and asks it, once the capture ends, for the text of
+the board's SUMMARY line.
+Two come built in:
+.Bl -tag -width lines
+.It Cm lines
+How many lines the board printed.
+The default, and all a tool that knows nothing about the firmware can
+honestly say.
+.It Cm none
+Nothing: the lines are printed, and no SUMMARY follows them.
+.El
+.Pp
+Any other is a block, registered by a Ruby file named with
+.Fl r :
+.Bd -literal
+# twr-tally.rb
+class TwrTally
+    def initialize(device) = @ok = 0
+    def <<(line)
+        @ok += 1 if line =~ /whatever this firmware calls success/
+        self
+    end
+    def summary = "ok=#{@ok}"
+end
+
+TribeControl::Tally.register(:twr) {|device| TwrTally.new(device) }
+.Ed
+.Pp
+The object the block returns needs two methods:
+.Ic <<
+takes a line and returns anything, and
+.Ic summary
+returns the SUMMARY text, or nil for no SUMMARY line at all.
+The block is called once per board per run, so a tally may keep
+whatever state it likes without sharing it with another board's.
+.Pp
+Which tally a board uses is a devlist key.
+At the top of the file it sets the bench's default, and inside a device
+entry it overrides that for one board:
+.Bd -literal
+tally = twr                     # every board on this bench
+
+D4 { port = 7, tally = lines }  # except this one
+.Ed
+.Pp
+A name nothing has registered is an error, not a silent fall back to
+counting lines: a devlist asking for twr on a run that forgot
+.Fl r
+would otherwise capture the whole bench and report line counts, which
+reads exactly like a firmware that has gone quiet.
+.Sh RECIPES
+Read the serials of every board, to fill in the devlist.
+This cycles the
+bench and leaves it powered off:
+.Bd -literal
+tribe\-control \-D devlist.conf serial
+tribe\-control \-D devlist.conf usb on
+.Ed
+.Pp
+Add a board on a new port.
+\&'serial 7' will not work: an undeclared port
+has no name, and the tool refuses to power ports the devlist never
+mentions.
+Declare a stub first, then read the serial and fill it in:
+.Bd -literal
+echo "X1 { port = 11 }" >> devlist.conf
+tribe\-control \-D devlist.conf serial X1
+.Ed
+.Pp
+Pick a port nothing else declares.
+Two entries on one port is refused at
+load time, for every command including 'usb status', so a collision here
+leaves the devlist unusable until it is edited back.
+.Pp
+Flash the whole bench, then just two boards:
+.Bd -literal
+tribe\-control \-D devlist.conf flash zephyr.hex
+tribe\-control \-D devlist.conf flash zephyr.hex alpha beta
+.Ed
+.Pp
+Flash in parallel, leaving the bench powered.
+Needs a serial for every
+board named, so fix the gaps first (see DEVLIST):
+.Bd -literal
+tribe\-control \-D devlist.conf \-\-method serial flash zephyr.hex
+.Ed
+.Pp
+Run a ranging capture to a log, for ten minutes:
+.Bd -literal
+stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off gamma epsilon \e
+    | tee twr.log
+.Ed
+.Pp
+Find out why a board is silent \(em capture its boot, including the driver
+init lines, for one minute:
+.Bd -literal
+stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off \-\-reset \e
+    \-\-duration=60 gamma beta | tee boot.log
+.Ed
+.Pp
+Capture ranging results from a stock redskin build.
+Without the command
+the log level hides them and the SUMMARY reads ok=0 / tx\-rate=NaN:
+.Bd -literal
+stdbuf \-oL tribe\-control \-D devlist.conf connect \-\-off \-\-reset \e
+    \-\-command='spank syslog info' \-\-duration=60 gamma beta | tee twr.log
+.Ed
+.Pp
+Power\-cycle one board without disturbing the others:
+.Bd -literal
+tribe\-control \-D devlist.conf usb off gamma && sleep 2 && \e
+tribe\-control \-D devlist.conf usb on  gamma
+.Ed
+.Pp
+Deliberately reboot a device on a reserved port (the only case for
+\-\-force).
+This is a hard power cut; shut the device down over the
+network first:
+.Bd -literal
+tribe\-control \-D devlist.conf \-\-force usb off 14 && sleep 2 && \e
+tribe\-control \-D devlist.conf usb on 14
+.Ed
+.Pp
+Flash from a script, failing the build if any board failed:
+.Bd -literal
+#!/bin/sh
+cd /root || exit 1
+exec tribe\-control \-D devlist.conf flash zephyr.hex
+.Ed
+.Sh TRAPS
+Exit status.
+Any command exits 1 if it aborts with an error \(em a refused
+power\-down, an unknown device name, a hub that answers E01.
+On top of
+that, flash, reset and serial exit 1 when they ran to completion but some
+board failed; usb and connect report nothing about the work itself, so a
+0 from 'connect' says only that it started.
+Beware that piping into
+\&'tee' hands you tee's status, not tribe\-control's \(em which is exactly
+what the capture recipe does, so do not use that shape in a script
+without a pipefail or a temporary file.
+.Pp
+\-\-method power leaves every declared board powered off when it finishes.
+Nothing defaults to it any more: flash defaults to serial, reset is
+serial only, and serial and connect are usb only.
+You get it by asking
+for it with \-m power, and then you want 'usb on' afterwards to bring the
+bench back.
+.Pp
+connect stops after 600 seconds unless \-\-duration says otherwise; Ctrl\-C
+is the other way out of a shorter run.
+Under \-\-interactive there is no
+timer at all: it ends on end of input (Ctrl\-D) or on Ctrl\-C.
+.Pp
+A SUMMARY counting nothing is not proof that a board said nothing.
+A tally counts the strings one firmware prints, so the wrong tally on a
+board, or the right one on a firmware whose log level hides the lines,
+both report a healthy board as an idle one.
+Check which tally the board is using
+.Pq Sx TALLIES
+and that the firmware is logging at all before concluding the radio is
+dead; \-\-command is how a log level is raised at run time.
+.Pp
+\-\-debug takes an optional FILE which is ignored.
+The flag only raises the
+log level to debug; output still goes to the terminal.
+.Pp
+FreeBSD is half usable.
+Hub auto\-detection, exsys_ctrl and
+daplink_mapping all work there.
+Note that openocd is not at
+/usr/bin/openocd there: pass \-\-openocd=/usr/local/bin/openocd, or just
+\-\-openocd=openocd and let PATH answer.
+.Pp
+What remains Linux\-only is port_to_usb, usb_to_tty and usb_to_serial,
+which read /sys/bus/usb.
+That rules out \-\-method usb, and with it both commands that select
+that way and no other:
+.Ic connect
+and
+.Ic serial .
+.Pp
+So on FreeBSD:
+.Ic usb ,
+.Ic flash
+and
+.Ic reset
+work, and
+.Ic serial
+and
+.Ic connect
+do not.
+Each of the three missing pieces says so by name rather than dying on
+NoMethodError \(em which is what
+.Ic connect
+did until 2026\-09\-17, when this was first run on a FreeBSD host and
+the paragraph you are reading turned out to have promised
+.Ic serial
+as well.
+.Pp
+\-\-method usb trusts the 4\-by\-4 geometry.
+A board on port 16 would resolve
+to 1\-1.2.4.4, which is where the FT232 control adapter already sits, so
+port 16 is not usable for a board addressed that way.
+.Pp
+The hub password defaults to 'pass' (\-p/\-\-password to change it).
+It
+guards writes to the hub, not reads.
+.Sh FILES
+.Bl -tag -width /tmp/tribe-control.hub.lock
+.It Pa devlist.conf
+The device list, named with
+.Fl D .
+It has no default and no fixed location: it describes a bench rather
+than the tool, so it lives with whatever owns the bench.
+See
+.Sx DEVLIST .
+.It Pa /usr/bin/openocd
+The openocd binary, overridable with
+.Fl -openocd .
+.It Pa /tmp/tribe-control.hub.lock
+Held for the duration of each exchange with the hub.
+The 16 ports are switched over a single FT232, so two
+.Nm
+processes touching it at once both fail; they queue here instead.
+The exsys gem locks the serial line itself as of 0.6, which covers
+every user of the hub rather than only this one; this file is what
+still serialises on a host that will not lock a character device.
+.El
+.Sh SEE ALSO
+.Xr openocd 1
+.Sh AUTHORS
+.An Stephane D'Alu Aq Mt sdalu@sdalu.com

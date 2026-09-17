@@ -1,6 +1,11 @@
 # The bundle is installed on the hub host, not kept here.
 /vendor/
 /.bundle/
+/bin/
+
+# Built gems.
+/pkg/
+*.gem
 
 # Capture logs and firmware images land wherever the tool is run.
 *.log

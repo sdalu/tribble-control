@@ -41,7 +41,7 @@
 # broken copy: a test that has never been seen to fail is not evidence.
 set -e
 host=${1:-134.214.146.186}
-tc=${2:-/root/tribe-control}
+tc=${2:-/root/tribe-control/bin/tribe-control}
 dl=/root/devlist.conf
 fail=0
 
@@ -95,14 +95,65 @@ status () {  # status <name> <expected-exit> <command...>
 say "naming a port = none entry says so" \
     "is not on the bench" "$tc -D $dl connect B1"
 
-# The manual sits after __END__ and is reached only through --man, so
-# nothing else in the program would notice if DATA stopped being read.
+# The manual is a file beside the code, reached only through --man, so
+# nothing else in the program would notice if it stopped being found.
 # The tail is checked rather than the head: a truncated read still
 # prints a plausible-looking banner.
 say "--man prints the manual"  "TRAPS"       "$tc --man"
 say "--man reaches the end"    "guards writes to the hub, not reads" \
     "$tc --man"
 status "--man exits 0"         0             "$tc --man"
+
+# An empty device selection.
+#
+# exsys reads "no ports named" as "every port", so an empty splat is
+# indistinguishable from a deliberate hub.off(). A devlist whose every
+# entry says 'port = none' selects nothing, and each_device carried that
+# nothing into the hub: --method serial powered all sixteen ports UP and
+# then reported success for the nought boards it flashed, and --method
+# power powered the whole bench DOWN, looped over nothing and left it
+# off. It is refused at selection now, before the hub is touched.
+#
+# Only the default method (serial) is exercised here: reproducing the
+# --method power case on a live bench would mean cutting it.
+ssh -o BatchMode=yes "root@$host" \
+    "sed 's/^  port        = [0-9][0-9]*/  port        = none/' $dl > /tmp/t-none.conf"
+say "an empty device selection is refused" \
+    "no device selected" "$tc -D /tmp/t-none.conf flash /tmp/tribe-test-no-such.hex"
+status "and it exits 1" 1 "$tc -D /tmp/t-none.conf flash /tmp/tribe-test-no-such.hex"
+# The positive control: the same command on the real devlist gets past
+# selection and fails later, on the missing firmware, not on selection.
+say "a real devlist still selects its boards" \
+    "Devices :" "$tc -D $dl flash /tmp/tribe-test-no-such.hex DB"
+
+# The openocd gate.
+#
+# Every command that reaches a board shells out to openocd, and until
+# 2026-09-17 a missing or mistyped one was Errno::ENOENT out of Open3 --
+# once per board, from inside the thread pool, after the ports had been
+# powered up and the warm-up slept through. flash and reset now check
+# for it before switching anything. Nothing here touches the hub: the
+# check happens before the first command is sent.
+say "a missing openocd is named, not ENOENT" \
+    "openocd not found at '/tmp/no-such-openocd'" \
+    "$tc -D $dl --openocd=/tmp/no-such-openocd reset DB"
+status "and it exits 1" 1 "$tc -D $dl --openocd=/tmp/no-such-openocd reset DB"
+# The positive control: the real one is still found, or the test above
+# would pass on a tool that rejected every path.
+status "the real openocd is accepted" 0 "$tc -D $dl --openocd=openocd usb status"
+
+# --require, which is how a tally reaches the tool.
+#
+# A devlist naming a tally that nothing registered is an error rather
+# than a silent fall back to counting lines: a capture that reported
+# line counts would read exactly like a bench that had gone quiet.
+say "a missing --require file is refused" \
+    "no such file to require" \
+    "$tc -D $dl -r /tmp/no-such-tally.rb usb status"
+ssh -o BatchMode=yes "root@$host" \
+    "printf 'class T\n def initialize(d); @n = 0; end\n def <<(l); @n += 1; self; end\n def summary; %s; end\nend\nTribeControl::Tally.register(:test) {|d| T.new(d) }\n' \\
+     '\"seen=#{@n}\"' > /tmp/t-tally.rb"
+status "a --require'd file loads" 0 "$tc -D $dl -r /tmp/t-tally.rb usb status"
 
 # The exit status of flash and reset.
 #
@@ -211,5 +262,5 @@ else
     echo "skip  power-cycle gate (TRIBE_TEST_FLASH=1 to run it; it writes flash)"
 fi
 
-ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf'
+ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf /tmp/t-tally.rb'
 [ "$fail" -eq 0 ] && echo "all tribe-control tests passed" || { echo "$fail failed"; exit 1; }
