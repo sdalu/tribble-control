@@ -1415,8 +1415,8 @@ tribe-control only ever issues SP, never FP or WP: port states are set for
 the here and now and never written to the hub's flash, so nothing it does
 survives a hub power cycle.  Note also that RD, the only recovery from a
 forgotten password, drops every port -- so changing the password with CP
-is close to a one-way door on a hub carrying anything that minds
-losing power without notice.
+is close to a one-way door on a hub carrying anything that minds losing
+power without notice.
 
 There is no per-port current or voltage telemetry, and no way to bolt it
 on: the protocol has no such command, cusba64 contains no such code, and
@@ -1441,22 +1441,21 @@ is the only thing that tells tribe-control which ports it may touch.
     undeclared = protect            # the default; see PROTECTED PORTS
     reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
 
-    alpha { serial = '1026360216055e5b0000...97969902'  port = 1 }
-    beta  {                                             port = 2 }
-    gamma { serial = '1026360213072dde0000...97969902'  port = 4 }
+    alpha   { serial = '1026360216055e5b0000...97969902'  port = 1    }
+    beta    {                                             port = 2    }
+    gamma   { serial = '1026360213072dde0000...97969902'  port = 4    }
     retired { serial = '1026360202c4dc0f0000...97969902'  port = none }
 
 Indentation is not significant; a CMSIS-DAP serial is 48 hex characters
 and a J-Link one 12, and both are pasted whole -- the ones above are
 elided in the middle for width.
 
-Every device entry must carry a port, and 'port = none' is how one says
-it is a record rather than a board on the bench.  'retired' above is the
-case: it stopped enumerating, its port was given to another board, and
-the entry stays so that its serial is not lost.  Such an entry is left
-out of everything -- never selected, never switched, never flashed --
-and naming it says so ("device 'retired' is not on the bench").  A MISSING
-port is an
+Every device entry must carry a port, and 'port = none' is how one says it
+is a record rather than a board on the bench.  'retired' above is the
+case: it stopped enumerating, its port was given to another board, and the
+entry stays so that its serial is not lost.  Such an entry is left out of
+everything -- never selected, never switched, never flashed -- and naming
+it says so ("device 'retired' is not on the bench").  A MISSING port is an
 error, not a synonym for none: deleting the port line is exactly what
 happens when a port is reassigned, and inferring "gone" from a line
 somebody forgot would drop a live board silently.  Two entries claiming
