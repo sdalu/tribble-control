@@ -95,6 +95,15 @@ status () {  # status <name> <expected-exit> <command...>
 say "naming a port = none entry says so" \
     "is not on the bench" "$tc -D $dl connect B1"
 
+# The manual sits after __END__ and is reached only through --man, so
+# nothing else in the program would notice if DATA stopped being read.
+# The tail is checked rather than the head: a truncated read still
+# prints a plausible-looking banner.
+say "--man prints the manual"  "TRAPS"       "$tc --man"
+say "--man reaches the end"    "guards writes to the hub, not reads" \
+    "$tc --man"
+status "--man exits 0"         0             "$tc --man"
+
 # The exit status of flash and reset.
 #
 # Both fold over what each_device returns, and each_device used to run

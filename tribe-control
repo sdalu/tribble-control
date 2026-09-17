@@ -11,7 +11,8 @@
 # lifts that rule.
 #
 # Full documentation -- port map, device selection, recipes and traps --
-# is at the end of this file, after __END__.
+# is at the end of this file, after __END__, and is displayed by
+# `tribe-control --man`.
 #
 
 require 'bundler/setup'
@@ -316,9 +317,38 @@ class CLI
             puts ''
             puts "See '#{opts.program_name} CMD --help'"                \
                  " for more information on a specific command"
+            puts "See '#{opts.program_name} --man'"                     \
+                 " for the manual"
             puts ''
             exit
         end
+        opts.on '--man',                "Show the manual" do
+            CLI.show_manual
+            exit
+        end
+    end
+
+    # Display the manual embedded after __END__, paging it when the
+    # output is a terminal.  DATA is only defined when the script is
+    # run directly; if it was loaded some other way, say so rather
+    # than dying on a missing constant.
+    def self.show_manual
+        unless Object.const_defined?(:DATA)
+            raise CLI::Error, 'no manual embedded in this file'
+        end
+        text = DATA.read
+        pager = ENV['PAGER'] || 'less'
+        if $stdout.tty? && !pager.empty?
+            begin
+                IO.popen(pager, 'w') {|io| io.write(text) }
+                return
+            rescue Errno::ENOENT, Errno::EPIPE
+                # No such pager, or the reader quit early: fall through.
+            end
+        end
+        $stdout.write(text)
+    rescue Errno::EPIPE
+        # Output closed (head, a quit pager): nothing left to say.
     end
 
     PROGNAME = GlobalParser.program_name
@@ -1251,24 +1281,25 @@ Power, flash and monitor the devices plugged into an ExSYS 16-port managed
 USB hub.
 
 The hub switches VBUS on each port independently, driven over an FT232
-serial line.  tribe-control drives that line.  For the nRF52-MDK boards on
-the bench it additionally speaks SWD to them through openocd/CMSIS-DAP and
-reads their console over USB CDC.  Everything else on the hub is only an
+serial line.  tribe-control drives that line.  For the nRF52 boards on it
+tribe-control additionally speaks SWD through openocd/CMSIS-DAP and reads
+their console over USB CDC.  Everything else on the hub is only an
 electrical load -- see PROTECTED PORTS.
 
-    ./tribe-control -D devlist.conf flash zephyr.hex A1 A3
-    stdbuf -oL ./tribe-control -D devlist.conf connect --off C2 B2 \
+    ./tribe-control -D devlist.conf flash zephyr.hex alpha beta
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off gamma epsilon \
         | tee twr.log
 
-It lives in /root on the bench Pi, alongside devlist.conf and the Gemfile.
-Run it from there: it requires bundler/setup at startup and so needs the
-Gemfile and the vendored bundle under ./vendor in the working directory.
+It lives on the host owning the hub, alongside devlist.conf and the
+Gemfile.  Run it from there: it requires bundler/setup at startup and so
+needs the Gemfile and the vendored bundle under ./vendor in the working
+directory.
 
 
-THE BENCH
+THE HUB
 ------------------------------------------------------------------------------
 
-  this host (raspberrypi)
+  the host running tribe-control
         │
         │  FT232R ──▸ /dev/ttyUSB0        the hub's control line.  It is
         │             9600 8N1            internal to the hub: it is NOT
@@ -1278,15 +1309,17 @@ THE BENCH
   │                                                                   │
   │    bank 1          bank 2          bank 3          bank 4         │
   │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
-  │  │  1  C2   │    │  5  A1   │    │  9   ·   │    │ 13  RPi  │     │
-  │  │  2  B2   │    │  6  B1   │    │ 10   ·   │    │ 14  RPi  │     │
-  │  │  3  A2   │    │  7   ·   │    │ 11   ·   │    │ 15  RPi  │     │
-  │  │  4  A3   │    │  8   ·   │    │ 12   ·   │    │ 16  RPi  │     │
+  │  │  1       │    │  5       │    │  9       │    │ 13       │     │
+  │  │  2       │    │  6       │    │ 10       │    │ 14       │     │
+  │  │  3       │    │  7       │    │ 11       │    │ 15       │     │
+  │  │  4       │    │  8       │    │ 12       │    │ 16       │     │
   │  └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
   └───────────────────────────────────────────────────────────────────┘
-      nRF52-MDK boards, declared        power only, nothing talks to
-      in devlist.conf.  SWD over        them.  Never power these down:
-      CMSIS-DAP, console over CDC.      see PROTECTED PORTS below.
+      Sixteen independently switched sockets.  What is on each is the
+      devlist's business, not this diagram's: a socket may carry a board
+      the tool drives over SWD, or something it only powers and never
+      talks to, or nothing at all.  Sockets in the second class are what
+      PROTECTED PORTS exists for.
 
 Ports are numbered 1 to 16 across four internal banks of four.  These are
 the hub's own numbers, the ones the devlist and every command use; whether
@@ -1296,22 +1329,22 @@ left to right and sockets top to bottom if you are looking for one by hand.
 The FT232 control adapter enumerates at the last position of the hub's
 internal tree (USB path 1-1.2.4.4), which makes it look as though it
 occupies port 16.  It does not: it is wired inside the hub and is not
-switched.  Port 16 is an ordinary socket, and on this bench it feeds a
-Raspberry Pi.  The one consequence is that a board must never be put on
-port 16: --method usb would compute the path 1-1.2.4.4 for it and address
-the FT232 instead.
+switched.  Port 16 is an ordinary socket like the other fifteen.  The one
+consequence is that a board must never be put on port 16: --method usb
+would compute the path 1-1.2.4.4 for it and address the FT232 instead.
 
-Which of the four Pis sits on which of ports 13 to 16 is not recorded
-anywhere, here or in the devlist.  If you need to reboot one in particular,
-establish that physically first -- the tool cannot tell you, because
-nothing on those ports communicates with the host.
+A port that only supplies power tells the tool nothing about what is on
+it, so if you need to reboot one device in particular, establish which
+socket it is physically first.  Nothing on such a port communicates with
+the host, and the devlist records a name and a port, not what is plugged
+in.
 
-The host is not one of them.  It has its own supply, so no hub port can
-cut power to the machine you are typing on, and --force is safe in that
-one narrow respect.
+The host running tribe-control is not powered from the hub, so no hub
+port can cut power to the machine you are typing on, and --force is safe
+in that one narrow respect.
 
-Requirements: Ruby 3.1 with the bundle vendored under ./vendor, and openocd
-0.12 at /usr/bin/openocd, overridable with --openocd.
+Requirements: Ruby 3.1 with the bundle vendored under ./vendor, and
+openocd at /usr/bin/openocd, overridable with --openocd.
 
 
 OPTIONS
@@ -1322,7 +1355,7 @@ Global options come before the command; a command's own options come after
 the command but before its sub-action.  So:
 
     ./tribe-control -D devlist.conf --force usb off 14      global, then cmd
-    ./tribe-control -D devlist.conf usb --default=false set C2:on
+    ./tribe-control -D devlist.conf usb --default=false set gamma:on
 
 and NOT 'usb set --default=false ...', which parses the flag as an argument
 to 'set' and fails with "invalid argument".
@@ -1382,20 +1415,21 @@ tribe-control only ever issues SP, never FP or WP: port states are set for
 the here and now and never written to the hub's flash, so nothing it does
 survives a hub power cycle.  Note also that RD, the only recovery from a
 forgotten password, drops every port -- so changing the password with CP
-is close to a one-way door on a bench with Pis on it.
+is close to a one-way door on a hub carrying anything that minds
+losing power without notice.
 
 There is no per-port current or voltage telemetry, and no way to bolt it
 on: the protocol has no such command, cusba64 contains no such code, and
 USB 2.x/3.x hubs do not report per-port draw to the host under any
 circumstances.  A device's bMaxPower descriptor is what it asks for at
-enumeration, not what it consumes, and the Raspberry Pis never enumerate
+enumeration, not what it consumes, and a pure power load never enumerates
 at all.  Measuring consumption needs an inline USB power meter or an
 instrumented bench supply.
 
 Two of these commands are worth fearing.  RH resets the hub and RD
-restores factory defaults; either drops every port, which reboots all four
-Raspberry Pis.  tribe-control never issues them, and the exsys gem only
-does so via #reset and #restore.
+restores factory defaults; either drops every port, which power-cycles
+everything on the hub, reserved ports included.  tribe-control never
+issues them, and the exsys gem only does so via #reset and #restore.
 
 DEVLIST
 ------------------------------------------------------------------------------
@@ -1405,24 +1439,24 @@ board's CMSIS-DAP serial number.  It is what -D/--devlist points at, and it
 is the only thing that tells tribe-control which ports it may touch.
 
     undeclared = protect            # the default; see PROTECTED PORTS
-    reserved   = [ 13, 14, 15, 16 ] # Raspberry Pi power feeds
+    reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
 
-    C2 { serial = '1026360216055e5b0000...97969902'  port = 1 }
-    B2 {                                             port = 2 }
-    A2 {                                             port = 3 }
-    A3 { serial = '1026360213072dde0000...97969902'  port = 4 }
-    A1 { serial = '102636021605598e0000...97969902'  port = 5 }
-    B1 { serial = '1026360202c4dc0f0000...97969902'  port = none }
+    alpha { serial = '1026360216055e5b0000...97969902'  port = 1 }
+    beta  {                                             port = 2 }
+    gamma { serial = '1026360213072dde0000...97969902'  port = 4 }
+    retired { serial = '1026360202c4dc0f0000...97969902'  port = none }
 
-Indentation is not significant; the serials above are elided in the middle
-for width, the real ones are 48 hex characters and must be pasted whole.
+Indentation is not significant; a CMSIS-DAP serial is 48 hex characters
+and a J-Link one 12, and both are pasted whole -- the ones above are
+elided in the middle for width.
 
 Every device entry must carry a port, and 'port = none' is how one says
-it is a record rather than a board on the bench.  B1 above is the case:
-it stopped enumerating, its port was given to another board, and the
-entry stays so that its serial is not lost.  Such an entry is left out of
-everything -- never selected, never switched, never flashed -- and naming
-it says so ("device 'B1' is not on the bench").  A MISSING port is an
+it is a record rather than a board on the bench.  'retired' above is the
+case: it stopped enumerating, its port was given to another board, and
+the entry stays so that its serial is not lost.  Such an entry is left
+out of everything -- never selected, never switched, never flashed --
+and naming it says so ("device 'retired' is not on the bench").  A MISSING
+port is an
 error, not a synonym for none: deleting the port line is exactly what
 happens when a port is reassigned, and inferring "gone" from a line
 somebody forgot would drop a live board silently.  Two entries claiming
@@ -1435,12 +1469,13 @@ a port number can be, in every command.
 A board with no serial= cannot be reached by 'reset' or by --method
 serial, both of which address a board by its serial number: the run
 aborts with "Device without serial".  Fix it by running 'serial' (see
-RECIPES) and pasting the value in.  Every board on this bench has one.
+RECIPES) and pasting the value in.
 
-Two optional keys describe a board that is not an nRF52-MDK (added
-2026-09-14 for D4, a DWM1001-DEV on port 7):
+Two optional keys describe a board whose probe or console differs from
+the default:
 
-    D4 { serial = '000760040233'  interface = jlink  baud = 115200  port = 7 }
+    epsilon { serial = '000760040233'  interface = jlink  baud = 115200
+              port = 7 }
 
     interface   the openocd interface script, without the .cfg: cmsis-dap
                 (the default, the MDK's DAPLink) or jlink (the DWM1001-DEV's
@@ -1458,9 +1493,7 @@ Two optional keys describe a board that is not an nRF52-MDK (added
                                 reports transmissions (the board resolves
                                 nothing and logs "our TX timestamps are
                                 missing") until the module is power-cycled;
-                                a plain SWD reset is fine.  Measured
-                                2026-09-14: 0 distances in 30 s after a
-                                flash, 709 after the cycle.
+                                a plain SWD reset is not enough.
                 A name nothing acts on is not an error, so a new moment can
                 be recorded here before the command that honours it exists.
                 It lives here, and not only as the flash --power-cycle
@@ -1471,7 +1504,7 @@ what to do with every port the file does not mention.  Both are described
 under PROTECTED PORTS.
 
 A misspelled 'reserverd' becomes a device named reserverd, which would
-silently unprotect four Raspberry Pis.  That one is now caught: every
+silently unprotect every reserved port.  That one is now caught: every
 device entry must carry a port, so the misspelling is refused at load
 with "devlist entry 'reserverd' has no port".  Validation stops there,
 though -- a serial, an interface or a baud that is wrong is wrong
@@ -1482,9 +1515,11 @@ the names and the protected column before you trust it.
 PROTECTED PORTS
 ------------------------------------------------------------------------------
 
-Four Raspberry Pis hang off this hub for power only.  Nothing communicates
-with them, so nothing notices if their VBUS disappears -- they simply
-reboot, uncleanly, mid-write.  Two devlist keys keep that from happening.
+Some things on the hub are there for power alone: a single-board computer,
+a powered peripheral, anything the bench feeds but does not drive.  Nothing
+communicates with them, so nothing notices if their VBUS disappears -- they
+simply reboot, uncleanly, mid-write.  Two devlist keys keep that from
+happening.
 
 'undeclared' decides the fate of every port the devlist does not mention:
 
@@ -1518,11 +1553,11 @@ protected port is an error, not a silent skip:
 Without a devlist there is no safe set, so power-down is refused outright.
 
 -F/--force lifts both rules and restores the old "all 16 ports" behaviour.
-It is the only way to deliberately reboot a Pi, and it is a hard VBUS cut,
-not a shutdown: the Pi loses power mid-write, with whatever consequences
-that has for its filesystem.  Shut it down over the network first if you
-care about what is on it.  It cannot strand you, though -- the host runs
-off its own supply, not off the hub.
+It is the only way to deliberately reboot a power-only device, and it is a
+hard VBUS cut, not a shutdown: the device loses power mid-write, with
+whatever consequences that has for its filesystem.  Shut it down over the
+network first if you care about what is on it.  It cannot strand you,
+though -- the host runs off its own supply, not off the hub.
 
 Powering *on* is never guarded: 'usb on' with no arguments still turns on
 all 16 ports, which is the state the bench should normally sit in.
@@ -1538,7 +1573,7 @@ There are three ways, chosen with -m/--method:
   │ method  │ addresses a     │ requires     │ power while the job    │
   │         │ board by        │              │ runs                   │
   ├─────────┼─────────────────┼──────────────┼────────────────────────┤
-  │ serial  │ its CMSIS-DAP   │ serial= for  │ every declared port    │
+  │ serial  │ its debug probe │ serial= for  │ every declared port    │
   │         │ serial number   │ every board  │ on; boards in parallel │
   ├─────────┼─────────────────┼──────────────┼────────────────────────┤
   │ usb     │ its USB path,   │ Linux (not   │ every declared port    │
@@ -1579,7 +1614,7 @@ first as its default:
 four banks of four:
 
       port 5 ─┬─▸ bank 2      bank is (port minus 1) div 4, plus 1
-      (A1)    └─▸ slot 1      slot is (port minus 1) mod 4, plus 1
+              └─▸ slot 1      slot is (port minus 1) mod 4, plus 1
 
       hub root path .............  1-1.2
       openocd adapter usb location 1-1.2.2.1
@@ -1587,6 +1622,14 @@ four banks of four:
                                      │   │ └── slot
                                      │   └──── bank
                                      └──────── hub root
+
+The location is documentation of intent rather than a selector: openocd
+0.12 ignores 'adapter usb location' for CMSIS-DAP, reaching the same
+adapter whichever path it is given, including one that does not exist.
+What selects is 'adapter serial', which this method passes as well
+whenever the devlist has one.  A board with no serial= is therefore
+addressed by nothing in particular, and with more than one adapter
+powered that is a board chosen at random.
 
 After any power-on, -W/--warm-up seconds (default 5) pass before the boards
 are touched, to let them enumerate.
@@ -1605,7 +1648,7 @@ usb  status|on|off|toggle|set  [PORT|DEVNAME]...
     port (see PROTECTED PORTS).
     --default=BOOL sets what happens to ports 'set' does not name; it goes
     before the word 'set'.  Without --force it is applied only to
-    switchable ports, so it cannot sweep a Pi off.
+    switchable ports, so it cannot sweep a reserved port off.
     'status' is read-only: it asks the hub for its port mask and prints
     every port with its device name, its state, and whether the devlist
     lets tribe-control switch it.  Run it before anything involving
@@ -1617,18 +1660,18 @@ usb  status|on|off|toggle|set  [PORT|DEVNAME]...
 serial  [PORT|DEVNAME]...
     Report each board's CMSIS-DAP serial number, by running openocd and
     reading the USB descriptor the kernel already holds.  Prints one line
-    per board, "Serial for A1: 1026...".  Use it to populate the devlist.
+    per board, "Serial for alpha: 1026...".  Use it to populate the devlist.
     Selection method: usb only, so Linux only.  It powers the boards' own
     ports up and leaves the rest of the bench alone -- asking a board its
     serial is not a reason to black out the hub.  Exit status: 1 if any
     board could not be read.
 
-    It used to ask openocd and parse "Info : CMSIS-DAP: Serial# =" or a
-    J-Link "S/N" line, which is why it needed --method power: openocd
-    cannot choose between adapters, so a board had to be the only one
-    powered.  openocd 0.12.0 prints neither line at any debug level, and
-    0.12.0 is the current release, so that route is gone rather than
-    merely slow.
+    The serial comes from the operating system rather than from openocd,
+    which does not report it: openocd 0.12 prints neither a CMSIS-DAP
+    "Serial# =" line nor a J-Link "S/N" one, at any debug level.  Asking
+    the OS also means no board has to be the only one powered, which
+    asking openocd would have required, since it cannot choose between
+    adapters by itself.
 
 flash  FIRMWARE [PORT|DEVNAME]...
     openocd 'flash write_image erase FIRMWARE' then 'reset run', against
@@ -1651,14 +1694,14 @@ reset  [PORT|DEVNAME]...
 
 connect  [PORT|DEVNAME]...
     Open each board's CDC console at its baud= (default 230400) and
-    stream it, prefixing
-    every line with <DEVNAME>.  Lines are tallied into five buckets: ok, inversion, not-defined (all
-    three matching "SDS TWR"), failed ("Resolving failed", which also
-    says "SDS TWR" and was once counted as ok) and mismatch ("TX and
-    round mismatch").  A spank report line ("Distance = ...",
-    see --command) counts as ok too: it is the same successful exchange
-    reported by a cheaper path.  On exit each board prints a SUMMARY line
-    with those counts and a tx-rate percentage.
+    stream it, prefixing every line with <DEVNAME>.  Lines are tallied
+    into five buckets: ok, inversion, not-defined (all three matching
+    "SDS TWR"), failed ("Resolving failed", which also says "SDS TWR")
+    and mismatch ("TX and round mismatch").
+    A spank report line ("Distance = ...", see --command) counts as ok
+    too: it is the same successful exchange reported by a cheaper path.
+    On exit each board prints a SUMMARY line with those counts and a
+    tx-rate percentage.
     Boards are streamed concurrently, one thread each, which is what
     makes a two-way-ranging capture meaningful; the "in sequence" in the
     method table above describes the order boards are set up in, not the
@@ -1692,11 +1735,11 @@ connect  [PORT|DEVNAME]...
     turns them on without reflashing.  Prefer the second: the report path
     is written straight out by the port instead of going through the
     syslog, so it is not silenced by the compiled-in level and costs the
-    firmware less in a loop that is timing sensitive.  It is sent once, to every selected
-    board, on a separate write handle; the command is not echoed by
-    tribe-control, but the board's own echo and reply appear in the
-    capture like any other output.  Give it once -- repeating the option
-    keeps only the last.
+    firmware less in a loop that is timing sensitive.  It is sent once,
+    to every selected board, on a separate write handle; the command is
+    not echoed by tribe-control, but the board's own echo and reply
+    appear in the capture like any other output.  Give it once --
+    repeating the option keeps only the last.
     ALWAYS run it under 'stdbuf -oL' if you are piping the output
     anywhere.  Without that, the pipe buffers in 4 KB blocks and 'tee'
     shows nothing for minutes.
@@ -1738,7 +1781,7 @@ leaves the devlist unusable until it is edited back.
 Flash the whole bench, then just two boards:
 
     ./tribe-control -D devlist.conf flash zephyr.hex
-    ./tribe-control -D devlist.conf flash zephyr.hex A1 A3
+    ./tribe-control -D devlist.conf flash zephyr.hex alpha beta
 
 Flash in parallel, leaving the bench powered.  Needs a serial for every
 board named, so fix the gaps first (see DEVLIST):
@@ -1747,28 +1790,29 @@ board named, so fix the gaps first (see DEVLIST):
 
 Run a ranging capture to a log, for ten minutes:
 
-    stdbuf -oL ./tribe-control -D devlist.conf connect --off C2 B2 \
+    stdbuf -oL ./tribe-control -D devlist.conf connect --off gamma epsilon \
         | tee twr.log
 
 Find out why a board is silent -- capture its boot, including the driver
 init lines, for one minute:
 
     stdbuf -oL ./tribe-control -D devlist.conf connect --off --reset \
-        --duration=60 C2 A2 | tee boot.log
+        --duration=60 gamma beta | tee boot.log
 
 Capture ranging results from a stock redskin build.  Without the command
 the log level hides them and the SUMMARY reads ok=0 / tx-rate=NaN:
 
     stdbuf -oL ./tribe-control -D devlist.conf connect --off --reset \
-        --command='spank syslog info' --duration=60 C2 A2 | tee twr.log
+        --command='spank syslog info' --duration=60 gamma beta | tee twr.log
 
 Power-cycle one board without disturbing the others:
 
-    ./tribe-control -D devlist.conf usb off C2 && sleep 2 && \
-    ./tribe-control -D devlist.conf usb on  C2
+    ./tribe-control -D devlist.conf usb off gamma && sleep 2 && \
+    ./tribe-control -D devlist.conf usb on  gamma
 
-Deliberately reboot a Raspberry Pi (the only case for --force).  This is a
-hard power cut; shut the Pi down over the network first:
+Deliberately reboot a device on a reserved port (the only case for
+--force).  This is a hard power cut; shut the device down over the
+network first:
 
     ./tribe-control -D devlist.conf --force usb off 14 && sleep 2 && \
     ./tribe-control -D devlist.conf usb on 14
@@ -1812,20 +1856,16 @@ distances at info, so a perfectly healthy pair reports ok=0.  See
 --debug takes an optional FILE which is ignored.  The flag only raises the
 log level to debug; output still goes to the terminal.
 
-FreeBSD is still only half usable, though less so than it was.  Hub
-auto-detection works now -- Platform::FreeBSD.sysctl used to be defined
-as an instance method and called as a module one, so it died with
-NoMethodError before reading a single sysctl -- and exsys_ctrl and
-nrf52mdk_mapping both run, verified on a FreeBSD 15.1 host with no hub
-attached, where they correctly return nothing rather than raising.
+FreeBSD is half usable.  Hub auto-detection, exsys_ctrl and
+nrf52mdk_mapping all work there.
 
 What remains Linux-only is port_to_usb and usb_to_tty, which read
 /sys/bus/usb, so --method usb and therefore connect still cannot work
 there.  usb, serial, flash and reset should.
 
 --method usb trusts the 4-by-4 geometry.  A board on port 16 would resolve
-to 1-1.2.4.4, which is where the FT232 control adapter already sits.  The
-bench keeps boards on ports 1 to 6, so this stays theoretical.
+to 1-1.2.4.4, which is where the FT232 control adapter already sits, so
+port 16 is not usable for a board addressed that way.
 
 The hub password defaults to 'pass' (-p/--password to change it).  It
 guards writes to the hub, not reads.
