@@ -7,3 +7,11 @@ AllCops:
   TargetRubyVersion: 3.1
   NewCops: enable
   SuggestExtensions: false
+  # A bundle vendored in the tree is not this project's code. Without
+  # this, a `bundle install` here (the user-level bundler config on this
+  # machine vendors into ./vendors) takes the offence count from about a
+  # thousand to seven and a half, which reads as a catastrophe and is
+  # somebody else's gems.
+  Exclude:
+    - 'vendor/**/*'
+    - 'vendors/**/*'
