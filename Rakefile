@@ -1,15 +1,34 @@
 require 'bundler/gem_tasks'
 
-# The suite runs against a DEPLOYED copy over ssh -- the gems it needs
-# live on the bench host, not here -- so this task only passes the two
-# things that change: which host, and where the binstub is on it.
-desc 'Run the regression suite against the deployed copy'
-task :test do
-    # The suite refuses to start without a host: one lab's address does
-    # not belong in the repository.  TRIBE_HOST or the first argument.
-    sh 'sh', 'test/test-tribe-control',
-       ENV.fetch('TRIBE_HOST', ''), ENV.fetch('TRIBE_PATH', ''),
-       ENV.fetch('TRIBE_TALLY', '')
+# Two suites, and `rake test` is the one that runs anywhere.
+#
+# The minitest half needs no hub: the devlist layer, types, tallies and
+# the openocd command line are all decided before hardware is touched,
+# and the hub exchange itself is tested against a pty emulator
+# speaking the real frames. The shell half drives a DEPLOYED copy over
+# ssh and needs the bench, so it is not what `rake` does by default --
+# a project whose only proof requires a lab in another city cannot be
+# checked by whoever is holding it.
+require 'rake/testtask'
+
+Rake::TestTask.new(:test) do |t|
+    t.libs       << 'test' << 'lib'
+    t.test_files  = FileList['test/test_*.rb']
+    t.warning     = false
+end
+
+namespace :test do
+    desc 'Run the regression suite against the copy deployed on a hub host'
+    task :bench do
+        # It refuses to start without a host: one lab's address does not
+        # belong in the repository.  TRIBE_HOST or the first argument.
+        sh 'sh', 'test/test-tribe-control',
+           ENV.fetch('TRIBE_HOST', ''), ENV.fetch('TRIBE_PATH', ''),
+           ENV.fetch('TRIBE_TALLY', '')
+    end
+
+    desc 'Both: what runs anywhere, then what needs the bench'
+    task :all => [ :test, :'test:bench' ]
 end
 
 # RubyGems has no notion of a man page: `gem install` copies the file

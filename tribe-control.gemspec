@@ -70,4 +70,9 @@ Gem::Specification.new do |spec|
     # default that changed under a pre-1.0 minor bump would not fail --
     # it would quietly stop finding 'port' on every entry.
     spec.add_dependency 'ucl', '~> 0.2.0'   # the device list format
+
+    # Pinned to 5: minitest 6 moved minitest/mock out into a gem of its
+    # own, which is a trap worth naming even though nothing here mocks.
+    spec.add_development_dependency 'minitest', '~> 5'
+    spec.add_development_dependency 'rake'
 end
