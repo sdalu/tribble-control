@@ -27,11 +27,26 @@ Gem::Specification.new do |spec|
     # Class#subclasses, which is how commands are discovered.
     spec.required_ruby_version = '>= 3.1'
 
+    # The manifest is resolved against this file's directory, not the
+    # working one, so it says the same thing wherever it is read from.
+    #
+    # `gem build` must still run with the checkout as its working
+    # directory: RubyGems reads the listed paths relative to the cwd,
+    # not to the gemspec, so building from elsewhere fails however this
+    # list is written.  What the chdir fixes is which failure you get.
+    # Without it the globs came back empty and the error named only the
+    # four literal paths -- a message about README.md and LICENSE for a
+    # build that had quietly dropped the entire library.  With it the
+    # error names all sixteen, which reads as what it is.
+    #
     # man/man1/ keeps its shape inside the installed gem, which makes
     # the gem's man/ a usable MANPATH entry.  See `rake man:install`.
-    spec.files       = Dir['lib/**/*.rb'] +
-                       Dir['man/man1/*.1'] + Dir['examples/*'] +
-                       [ 'README.md', 'LICENSE', 'tribe-control.gemspec' ]
+    spec.files       = Dir.chdir(__dir__) {
+                           Dir['lib/**/*.rb'] +
+                           Dir['man/man1/*.1'] + Dir['examples/*'] +
+                           [ 'README.md', 'LICENSE',
+                             'tribe-control.gemspec' ]
+                       }
     spec.bindir      = 'exe'
     spec.executables = [ 'tribe-control' ]
 
