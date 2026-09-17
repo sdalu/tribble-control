@@ -54,6 +54,28 @@ class CLI
     UNDECLARED_KEY = 'undeclared'
     UNDECLARED     = [ :protect, :switch ].freeze
 
+    # Shared settings a device can inherit, and the key that asks for
+    # them.
+    #
+    # A bench is usually a handful of boards of two or three kinds, and
+    # what a kind is -- which probe, which chip, which transport, what
+    # speed its console runs at -- is the same on every one of them.
+    # Written per device that is four identical lines eleven times, and
+    # the reader has to compare them to find the one that differs.  A
+    # type says it once.
+    #
+    # One level only: a type is a block of settings, not a thing that
+    # can itself have a type.  Identity is not inheritable either --
+    # see TYPE_FORBIDDEN.
+    TYPES_KEY      = 'types'
+    TYPE_KEY       = 'type'
+
+    # What a type may not carry.  Both name one particular board: a
+    # port is where a single board is plugged in, and a serial is one
+    # physical probe.  A type that set either would be saying that
+    # every board of that kind is the same board.
+    TYPE_FORBIDDEN = [ 'port', 'serial' ].freeze
+
     # Which tally reads the consoles.  Recognised at the top of the
     # file, where it sets the bench's default, and inside a device,
     # where it overrides it for that board.  See Tally.
@@ -242,6 +264,7 @@ class CLI
         @reserved      = []
         @undeclared    = :protect
         @tally_default = TALLY_DEFAULT
+        @types         = {}
         @tty     = TTY::Logger.new do |config|
             config.level = :debug
         end
@@ -298,8 +321,18 @@ class CLI
                 when String  then @devlist.find {|k,v| k == id }&.last
                 else raise "unsupported id (#{id})"
                 end
-        return default if entry.nil? || !entry.key?(key)
-        entry[key]
+        return default if entry.nil?
+        return entry[key] if entry.key?(key)
+
+        # Then the type, if it named one.  The entry wins: a type is
+        # what a kind of board has in common, and a device that says
+        # otherwise is saying it about itself.
+        if (name = entry[TYPE_KEY])
+            type = @types[name.to_s]
+            return type[key] if type&.key?(key)
+        end
+
+        default
     end
 
     # openocd interface script for a board, without the .cfg: cmsis-dap
@@ -734,8 +767,37 @@ class CLI
                 @tally_default = raw[TALLY_KEY].to_s
             end
 
+            # The type definitions, lifted out before anything is
+            # taken for a device.
+            if raw.include?(TYPES_KEY)
+                @types = raw[TYPES_KEY]
+                unless @types.is_a?(Hash)
+                    raise Error, "#{TYPES_KEY} must be a block of named" \
+                                 ' definitions'
+                end
+                @types.each do |name, defn|
+                    unless defn.is_a?(Hash)
+                        raise Error, "type '#{name}' is not a block of settings"
+                    end
+                    # A type that named a port or a serial would be
+                    # saying every board of its kind is one board.
+                    if (bad = defn.keys & TYPE_FORBIDDEN).any?
+                        raise Error, "type '#{name}' sets #{bad.join(', ')}," \
+                                     ' which names one particular board and' \
+                                     ' cannot be shared'
+                    end
+                    # One level: a type is settings, not a thing with a
+                    # type of its own.
+                    if defn.key?(TYPE_KEY)
+                        raise Error, "type '#{name}' has a #{TYPE_KEY} of" \
+                                     ' its own; types do not nest'
+                    end
+                end
+            end
+
             @devlist  = raw.reject {|k,_|
-                [ RESERVED_KEY, UNDECLARED_KEY, TALLY_KEY ].include?(k)
+                [ RESERVED_KEY, UNDECLARED_KEY, TALLY_KEY,
+                  TYPES_KEY ].include?(k)
             }
 
             # Every device says which port it is on, or says none. A
@@ -758,6 +820,19 @@ class CLI
                 # in 'usb status'.  nil here means none, which is what
                 # PORT_NONE already says.
                 entry[PORT_KEY] = self.port_of(name)
+            end
+
+            # A type nothing defines is an error rather than an entry
+            # quietly falling back to the tool's defaults: a board that
+            # asked for jlink and silently got cmsis-dap is a flash
+            # through the wrong probe, reported as success.
+            @devlist.each do |name, entry|
+                next unless (t = entry[TYPE_KEY])
+                next if @types.key?(t.to_s)
+                known = @types.keys.sort
+                raise Error, "devlist entry '#{name}' has #{TYPE_KEY} =" \
+                             " #{t}, which #{TYPES_KEY} does not define" \
+                             " (known: #{known.empty? ? 'none' : known.join(', ')})"
             end
 
             # Two boards on one port is a devlist that cannot be right,

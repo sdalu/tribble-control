@@ -288,7 +288,8 @@ somebody forgot would drop a live board silently.
 Two entries claiming
 one port is refused at load, none excepted.
 .Pp
-Every key other than 'reserved', 'undeclared' and 'tally' is a device.
+Every key other than 'reserved', 'undeclared', 'tally' and 'types' is
+a device.
 A command
 given no device names operates on all of them.
 Names may be used anywhere
@@ -386,6 +387,61 @@ Both are described under
 .Sx PROTECTED PORTS .
 \&'tally' sets the bench's default tally, described under
 .Sx TALLIES .
+\&'types' holds settings a device can inherit, described next.
+.Ss Types
+A bench is usually a handful of boards of two or three kinds, and what
+a kind is \(em which probe, which chip, which transport, how fast its
+console runs \(em is the same on every board of that kind.
+Written out per device that is the same four lines eleven times, and a
+reader has to compare them all to find the one that differs.
+.Pp
+\&'types' says it once:
+.Bd -literal
+types {
+  nrf52840-mdk {
+    interface = cmsis-dap
+    target    = nrf52
+    transport = swd
+    baud      = 230400
+  }
+  dwm1001-dev {
+    interface   = jlink
+    target      = nrf52
+    transport   = swd
+    baud        = 115200
+    power_cycle = after-flash
+  }
+}
+
+alpha { type = nrf52840-mdk, serial = '1026...9902', port = 1 }
+delta { type = dwm1001-dev,  serial = '000760040233', port = 7 }
+epsilon { type = nrf52840-mdk, baud = 9600, port = 2 }
+.Ed
+.Pp
+A device's own key wins over its type's: a type is what a kind of board
+has in common, and an entry saying otherwise is saying it about itself.
+\&'epsilon' above is an nRF52840\-MDK whose console has been moved.
+.Pp
+Three rules, each of them refusing something at load rather than
+letting it read as working:
+.Bl -bullet
+.It
+A type nothing defines is an error.
+A board that asked for the jlink type and silently got the cmsis\-dap
+default is a flash through the wrong probe, reported as a success.
+.It
+A type may not set
+.Cm port
+or
+.Cm serial .
+Both name one particular board \(em a port is where a single board is
+plugged in, a serial is one physical probe \(em so a type that set
+either would be saying that every board of that kind is the same board.
+.It
+Types do not nest.
+A type is a block of settings, not a thing that can have a type of its
+own.
+.El
 .Pp
 A misspelled 'reserverd' becomes a device named reserverd, which would
 silently unprotect every reserved port.
