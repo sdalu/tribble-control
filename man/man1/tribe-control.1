@@ -568,7 +568,7 @@ first as its default:
 command    methods accepted          default
 \-\-\-\-\-\-\-    \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-          \-\-\-\-\-\-\-
 usb        (none: acts on ports)     n/a
-serial     usb                       usb
+serial     usb, power                usb
 flash      serial, power             serial
 reset      serial                    serial
 connect    usb, serial               usb
@@ -950,12 +950,25 @@ Measured on FreeBSD 15 against an nRF52840 on 2026\-09\-17: console
 opened, Zephyr shell read, lines counted.
 .Pp
 .Ic serial
-is the one command that cannot work there, for a reason no amount of
-platform code removes: it exists to READ a probe's serial off a board
-picked out by its hub port, so it needs precisely the port\-to\-device
-mapping that /sys/bus/usb provides and FreeBSD does not.
-Read the serials once on a Linux host, put them in the devlist, and
-everything else follows on either.
+works there too, with
+.Fl m Cm power .
+It has to identify a board it has no serial for yet, which is what
+.Cm power
+is for: it cuts every switchable port, brings up one board at a time,
+and the probe then enumerated is the only one there is.
+No topology, no descriptor path, nothing Linux has that FreeBSD has
+not.
+It costs a cycle of the whole bench and leaves it powered off \(em run
+.Ic usb on
+afterwards \(em which is why
+.Cm usb
+remains the default on a host that can use it.
+.Pp
+A probe on a port the devlist protects stays powered through all of
+that, so it is enumerated alongside the board being asked.
+.Nm
+says so and stops rather than attributing one board's serial to
+another.
 .Pp
 \-\-method usb trusts the 4\-by\-4 geometry.
 A board on port 16 would resolve
