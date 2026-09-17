@@ -284,6 +284,32 @@ the seams are for a new board family, a new probe, a new host platform,
 a new command or a new tally.
 
 
+## The name
+
+Tribbles are the small, furry, gentle and extremely numerous creatures
+of ["The Trouble with Tribbles"][episode] (*Star Trek*, 1967, written by
+David Gerrold).  McCoy works out why there are so many: they are born
+pregnant, and spend over half their metabolism reproducing.  By the end
+of the episode they have filled the ship, and Kirk is [shoulder-deep in
+them][kirk].
+
+A bench fills up the same way.  One board becomes three, three become
+eleven, they are identical, every one of them wants power, and not one
+of them will tell you which socket it is sitting in.  That last part is
+what the device list is for.
+
+![Tribble props from the Star Trek exhibit at the Henry Ford Museum][photo]
+
+Photo by Joe Ross, [CC BY-SA 2.0][licence], via [Wikimedia Commons][page].
+
+[episode]: https://en.wikipedia.org/wiki/The_Trouble_with_Tribbles
+[kirk]: https://en.wikipedia.org/wiki/Tribble#/media/File:ST_TroubleWithTribbles.jpg
+[photo]: https://commons.wikimedia.org/wiki/Special:FilePath/Tribbles!_-_Star_Trek_-_Exploring_New_Worlds_Exhibit_at_the_Henry_Ford_Museum.jpg?width=480
+[page]: https://commons.wikimedia.org/wiki/File:Tribbles!_-_Star_Trek_-_Exploring_New_Worlds_Exhibit_at_the_Henry_Ford_Museum.jpg
+[licence]: https://creativecommons.org/licenses/by-sa/2.0/
+
+
 ## License
 
-MIT.  See LICENSE.
+MIT.  See LICENSE.  The photograph above is not mine and is not MIT; it
+carries the CC BY-SA 2.0 licence credited with it.
