@@ -37,7 +37,7 @@ class FakeHub
         @slave&.close
     end
 
-    private
+  private
 
     def serve
         buf = +''
@@ -45,7 +45,7 @@ class FakeHub
             buf << @master.readpartial(256)
             handle(buf.slice!(0..buf.index("\r")).chomp("\r")) while buf.index("\r")
         end
-    rescue EOFError, Errno::EIO, IOError
+    rescue IOError, Errno::EIO          # IOError covers EOFError
         # the other end went away
     end
 
@@ -63,8 +63,8 @@ class FakeHub
         end
     end
 
-    def encode(v) = 4.times.map {|i| format('%02X', (v >> (8 * i)) & 0xff) }.join
-    def decode(h) = h.scan(/\h\h/).each_with_index.sum {|b, i| b.to_i(16) << (8 * i) }
+    def encode(word) = 4.times.map {|i| format('%02X', (word >> (8 * i)) & 0xff) }.join
+    def decode(hex) = hex.scan(/\h\h/).each_with_index.sum {|byte, i| byte.to_i(16) << (8 * i) }
 
-    def reply(s) = @master.write("#{s}\r\n")
+    def reply(text) = @master.write("#{text}\r\n")
 end

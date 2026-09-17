@@ -66,7 +66,7 @@ class Tally
         @lines  = 0
     end
 
-    def <<(line)
+    def <<(_line)
         @lines += 1
         self
     end

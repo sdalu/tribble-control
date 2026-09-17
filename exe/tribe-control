@@ -8,7 +8,7 @@ require 'tribe-control'
 begin
     TribeControl::CLI.run
 rescue => e
-    $stderr.puts "#{TribeControl::CLI::PROGNAME}: #{e.message || 'unknown'}"
-    $stderr.puts e.backtrace if $DEBUG
+    warn "#{TribeControl::CLI::PROGNAME}: #{e.message || 'unknown'}"
+    warn e.backtrace if $DEBUG
     exit 1
 end

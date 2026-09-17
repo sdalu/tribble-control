@@ -37,11 +37,10 @@ class USB < CLI::Command
                         switchable
                     rescue Error
                         []
-                    end
+            end
             state.each do |port, on|
-                puts '%2d  %-6s %-3s %s' % [
-                    port, named[port] || '-', on ? 'on' : 'off',
-                    safe.include?(port) ? '' : '(protected)' ]
+                puts format('%2d  %-6s %-3s %s', port, named[port] || '-', on ? 'on' : 'off',
+safe.include?(port) ? '' : '(protected)')
             end
         when 'on'
             # Powering up is always safe: no guard.
@@ -64,15 +63,15 @@ class USB < CLI::Command
         when 'set'
             tl = ExSYS::ManagedUSB::TRUE_LIST
             fl = ExSYS::ManagedUSB::FALSE_LIST
-            t  = tl.to_h {|e| [ e.to_s, e ]}
-            f  = fl.to_h {|e| [ e.to_s, e ]}
+            t  = tl.to_h {|e| [ e.to_s, e ] }
+            f  = fl.to_h {|e| [ e.to_s, e ] }
             tf = t.merge(f) { raise "true/false conflict (internal error)" }
-            r  = tf.keys.map {|e| Regexp.escape(e)}
+            r  = tf.keys.map {|e| Regexp.escape(e) }
             a = argv.to_h {|e|
                 unless e =~ /^([^:]+):(#{r.join('|')})$/
                     raise Error, "invalid argument (#{e})"
                 end
-                [ port_list([$1]).first, tl.include?(tf[$2]) ? :on : :off ]
+                [ port_list([ $1 ]).first, tl.include?(tf[$2]) ? :on : :off ]
             }
 
             # Vet the ports being powered down.

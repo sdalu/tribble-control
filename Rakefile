@@ -65,4 +65,12 @@ namespace :man do
     end
 end
 
-task :default => :test
+# A linter at zero is a gate; at 979 it was a wall nobody read. It runs
+# with the tests by default so that the next offence is the only one on
+# the screen.
+desc 'Check style against .rubocop.yml'
+task :lint do
+    sh 'rubocop', '--format', 'quiet'
+end
+
+task :default => [ :test, :lint ]

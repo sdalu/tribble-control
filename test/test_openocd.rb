@@ -10,10 +10,11 @@ class TestOpenocd < Minitest::Test
     # The command a run would have executed, without executing it.
     def issued(cli, **hopts)
         captured = nil
-        Open3.stub(:capture2e, ->(*cmd) {
+        fake = lambda do |*cmd|
             captured = cmd
             [ '', Struct.new(:exitstatus).new(0) ]
-        }) { cli.openocd('init', **hopts) }
+        end
+        Open3.stub(:capture2e, fake) { cli.openocd('init', **hopts) }
         captured
     end
 

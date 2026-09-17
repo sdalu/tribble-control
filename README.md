@@ -105,8 +105,15 @@ the wrong ports.
 Tests
 -----
 
+    rake                             # the tests that need no hub, and the linter
+    rake test                        # 52 of them: devlist, types, tallies,
+                                     #   the openocd command line, and the hub
+                                     #   itself against a pty emulator
+    rake test:bench                  # the ones that need the bench
+    rake lint
+
     sh test/test-tribe-control HOST [tribe-control-path] [tally-path]
-    TRIBE_HOST=<host> rake test      # also TRIBE_PATH, TRIBE_TALLY
+    TRIBE_HOST=<host> rake test:bench   # also TRIBE_PATH, TRIBE_TALLY
 
 The suite runs against a **deployed** copy: it drives the hub host over
 ssh, because that is the machine with the hub on the end of a serial

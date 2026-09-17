@@ -20,9 +20,9 @@ PROBE_VENDORS = %w[0d28 1366].freeze
 
 module FreeBSD
     def self.exsys_ctrl
-        self.sysctl('dev.uftdi').select {|k, v|
+        self.sysctl('dev.uftdi').select {|_k, v|
             v.dig(:'%pnpinfo') in { vendor: "0x0403", product: "0x6001" }
-        }.map { |k, dev| '/dev/tty' + dev.dig(:ttyname) }
+        }.map {|_k, dev| '/dev/tty' + dev.dig(:ttyname) }
     end
 
     # The three that are Linux-only, and why they are stubbed rather
@@ -74,10 +74,10 @@ module FreeBSD
     # already carries that serial to address the board for flashing,
     # and umodem says which tty the probe's CDC interface became.
     def self.probe_consoles
-        self.sysctl('dev.umodem').select {|k, v|
+        self.sysctl('dev.umodem').select {|_k, v|
             vendor = v.dig(:'%pnpinfo', :vendor).to_s.delete_prefix('0x')
             PROBE_VENDORS.include?(vendor)
-        }.to_h {|k, dev|
+        }.to_h {|_k, dev|
             [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev.dig(:ttyname) ]
         }
     end
@@ -96,8 +96,8 @@ module FreeBSD
                 v = Shellwords.shellsplit(v).to_h {|e| e.split('=', 2) }
                               .transform_keys(&:to_sym)
             end
-                
-            acc.merge(Integer(i) => {sk.to_sym => v}) {|k,o,n| o.merge(n) }
+
+            acc.merge(Integer(i) => { sk.to_sym => v }) {|_k,o,n| o.merge(n) }
         }
     end
 end
@@ -107,7 +107,7 @@ module Linux
     def self.exsys_ctrl
         Dir['/sys/class/tty/ttyUSB*']
             .map    {|path| self.udevadm_query(path) }
-            .select {|dev| dev in {ID_VENDOR_ID: '0403', ID_MODEL_ID: '6001'} }
+            .select {|dev| dev in { ID_VENDOR_ID: '0403', ID_MODEL_ID: '6001' } }
             .map    {|dev| dev[:DEVNAME] }
     end
 
@@ -127,24 +127,24 @@ module Linux
         when %r{^/dev/(\w+)}
             tty = $1
             unless self.udevadm_query(root)[:DEVPATH]
-                       .split(File::SEPARATOR) in [ *, root, _, _, _, ^tty, 'tty', ^tty]
+                       .split(File::SEPARATOR) in [ *, root, _, _, _, ^tty, 'tty', ^tty ]
                 raise CLI::Error, "unable to identify USB path for #{root}"
             end
-        when %r{^\d+-\d+(?:\.\d+)*$} # USB path root
+        when /^\d+-\d+(?:\.\d+)*$/ # USB path root
         else raise CLI::Error, "unhandled USB root (#{root})"
         end
 
         # ExSYS USB hub is a 4x4 ports
-        port_i = (port-1) / 4 + 1
-        port_j = (port-1) % 4 + 1
-        
+        port_i = ((port - 1) / 4) + 1
+        port_j = ((port - 1) % 4) + 1
+
         # Path
         "#{root}.#{port_i}.#{port_j}"
     end
-    
+
     def self.usb_to_tty(path)
         raise ArgumentError if path.nil?
-        if dev_path = Dir["/sys/bus/usb/devices/#{path}/**/tty/ttyACM*"]&.first
+        if (dev_path = Dir["/sys/bus/usb/devices/#{path}/**/tty/ttyACM*"]&.first)
             File.join('/dev', File.basename(dev_path))
         end
     end
@@ -173,7 +173,7 @@ module Linux
         end
         nil
     end
-    
+
     # private on its own does nothing here: this module has no instance
     # methods, and it never applied to a def self. singleton method.
     # udevadm_query was public for as long as it has existed.

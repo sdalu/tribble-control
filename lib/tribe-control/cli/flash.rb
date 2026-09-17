@@ -20,7 +20,7 @@ class Flash < CLI::Command
     # power_cycle = after-flash still fired.  'power' stays for a board
     # whose serial is missing or wrong.
     Methods  = [ 'serial', 'power' ]
-    Defaults = { }
+    Defaults = {}
     Parser   = OptionParser.new do |opts|
         # Usage
         opts.banner = "Usage: #{PROGNAME} flash [options] FIRMWARE [PORT|DEVNAME]..."
@@ -37,12 +37,12 @@ class Flash < CLI::Command
                                  'says (power_cycle = after-flash)'
     end
 
-    def flash(firmware, **hopts, &block)
+    def flash(firmware, **hopts)
         openocd('init', 'targets', 'reset init',
                 "flash write_image erase #{firmware}",
                 'reset run', **hopts)
     end
-    
+
     def run(argv, **opts)
         firmware = argv.shift
         tty&.info "Firmware: #{firmware}"

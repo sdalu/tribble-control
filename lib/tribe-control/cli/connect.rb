@@ -13,7 +13,7 @@ class Connect < CLI::Command
     # no topology, only the probe serial the devlist already carries
     # to address the board for flashing.
     Methods  = [ 'usb', 'serial' ]
-    Defaults = { }
+    Defaults = {}
     Parser   = OptionParser.new do |opts|
         # Usage
         opts.banner = "Usage: #{PROGNAME} connect [options] PORT"
@@ -35,7 +35,6 @@ class Connect < CLI::Command
         opts.on '--interactive', 'Type at the board: forward this' \
                                  ' standard input to it, and stay until' \
                                  ' end of input rather than for a duration'
-        
     end
 
     # Where this board's console is.
@@ -60,7 +59,7 @@ class Connect < CLI::Command
             tty&.info "Starting from off state: #{off_ports.join(' ')}"
             exsys.off(*off_ports)
         end
-      
+
         connected = []
         each_device(argv).each do |name, hopts={}|
           # No tty, no reader.  usb_to_tty returns nil when the glob finds
@@ -101,7 +100,7 @@ class Connect < CLI::Command
                     end
                 end
             ensure
-              if summary = counter.summary
+              if (summary = counter.summary)
                   puts "<#{name}> SUMMARY: #{summary}"
               end
             end
@@ -127,7 +126,7 @@ class Connect < CLI::Command
         # could do.  Written on a second, write-only handle: the reader
         # thread already holds the port, and sharing one IO across threads
         # for opposite directions is a race waiting for a long bench run.
-        if cmd = opts[:command]
+        if (cmd = opts[:command])
             sleep(opts[:reset] ? 2 : 0.5)   # let the shell come up
             connected.each do |name, hopts|
                 dev_tty = console(hopts)
@@ -178,7 +177,7 @@ class Connect < CLI::Command
         tty&.info "Typing at #{name} (^D to leave)"
         File.open(dev_tty, File::WRONLY | File::NOCTTY) do |w|
             w.sync = true
-            while line = $stdin.gets
+            while (line = $stdin.gets)
                 w.write("#{line.chomp}\r")
             end
         end

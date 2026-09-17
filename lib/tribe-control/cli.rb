@@ -18,13 +18,14 @@ require_relative 'platform'
 module TribeControl
 
 class CLI
-    # Command line error reporting 
+    # Command line error reporting
     class Error < StandardError
     end
 
     # Command class inheritance
     class Command
         extend Forwardable
+
         def_delegators :@cli, :exsys, :tty, :conf, :openocd, :each_device,
                               :port_list, :switchable, :offable, :offable?,
                               :devices, :tally
@@ -111,10 +112,10 @@ class CLI
                      :openocd   => '/usr/bin/openocd' }
     GlobalParser = OptionParser.new do |opts|
         opts.banner = "Usage: #{opts.program_name} ACTION"
-        
+
         opts.separator ''
         opts.separator 'Global options:'
-        
+
         opts.on '-d', '--device=DEV',      'Serial line to USB hub'
         opts.on '-p', '--password=STRING', 'USB hub password'
         opts.on '-D', '--devlist=FILE',    'Device list file'
@@ -145,8 +146,8 @@ class CLI
             puts opts
             puts ''
             puts 'Commands:'
-            CLI.commands.each { |name, klass|
-                puts '    %-12s %s' % [ klass.cmdname, klass::DESCRIPTION ]
+            CLI.commands.each_value {|klass|
+                puts format('    %-12s %s', klass.cmdname, klass::DESCRIPTION)
             }
             puts ''
             puts "See '#{opts.program_name} CMD --help'"                \
@@ -208,7 +209,7 @@ class CLI
         unless File.readable?(MANUAL)
             raise CLI::Error, "no manual found (#{MANUAL})"
         end
-        unless text = self.render_manual
+        unless (text = self.render_manual)
             raise CLI::Error, 'no manual page renderer found (tried' \
                               " #{RENDERERS.map(&:first).join(', ')}):" \
                               " read #{MANUAL} directly"
@@ -240,7 +241,7 @@ class CLI
 
     # Find the command class corresponding to the name.
     def self.find_command_class(name)
-        self.commands.find {|n,k| n == name }&.last
+        self.commands.find {|n,_k| n == name }&.last
     end
 
     # Run the command line
@@ -280,7 +281,7 @@ class CLI
         case id
         when /^\d+$/
             port = Integer(id)
-            if name = @devlist.find {|k,v| v.dig('port') == port }&.first
+            if (name = @devlist.find {|_k,v| v.dig('port') == port }&.first)
                 [ name, port ]
             end
         else
@@ -292,7 +293,7 @@ class CLI
                 raise Error, "device '#{id}' is not on the bench: the" \
                              " devlist gives it #{PORT_KEY} = none"
             end
-            if port = @devlist.find {|k,v| k == id }&.last&.dig('port')
+            if (port = @devlist.find {|k,_v| k == id }&.last&.dig('port'))
                 [ name, port ]
             end
         end.tap do |v|
@@ -305,11 +306,11 @@ class CLI
         return nil if @devlist.nil?
         case id
         when Integer
-            @devlist.find {|k,v| v.dig('port') == id }&.last&.dig('serial')
+            @devlist.find {|_k,v| v.dig('port') == id }&.last&.dig('serial')
         when String
-            @devlist.find {|k,v| k == id }&.last&.dig('serial')
+            @devlist.find {|k,_v| k == id }&.last&.dig('serial')
         else raise "unsupported id (#{id})"
-        end        
+        end
     end
 
     # Read an arbitrary key of a device (by port number or name)
@@ -322,8 +323,8 @@ class CLI
     def attribute(id, key, default = nil)
         return default if @devlist.nil?
         entry = case id
-                when Integer then @devlist.find {|k,v| v.dig('port') == id }&.last
-                when String  then @devlist.find {|k,v| k == id }&.last
+                when Integer then @devlist.find {|_k,v| v.dig('port') == id }&.last
+                when String  then @devlist.find {|k,_v| k == id }&.last
                 else raise "unsupported id (#{id})"
                 end
         return default if entry.nil?
@@ -388,7 +389,7 @@ class CLI
     # Console baud rate of a board (230400 on the bench's MDK firmware,
     # 115200 on the stock DWM1001-DEV devicetree)
     def baud(id)
-        Integer(self.attribute(id, 'baud', 230400))
+        Integer(self.attribute(id, 'baud', 230_400))
     end
 
     # Which tally reads this board's console: the devlist's key for the
@@ -512,7 +513,7 @@ class CLI
 
     def each_device(ids, &block)
         return to_enum(:each_device, ids) unless block
-        
+
         unless @opts.include?(:devlist)
             raise Error, "devlist is required"
         end
@@ -538,18 +539,20 @@ class CLI
         # between on() and on(*ports) -- so this is the one place that
         # needed the guard.
         if name_port_list.empty?
-            raise Error, ids.empty? \
-                ? 'no device selected: the devlist declares none that' \
-                  ' is on the bench (every entry says' \
-                  " #{PORT_KEY} = none)"                                \
-                : 'no device selected'
+            raise Error, if ids.empty?
+                             'no device selected: the devlist declares' \
+                               ' none that is on the bench (every entry' \
+                               " says #{PORT_KEY} = none)"
+                         else
+                             'no device selected'
+                         end
         end
 
         @tty&.info "Devices : #{name_port_list.keys.join(' ')}"
 
         case @opts[:method]
         when 'serial'
-          unless name_port_list.all? {|n,p| self.serial(p) }
+          unless name_port_list.all? {|_n,p| self.serial(p) }
             raise 'Device without serial' \
                   ' (select another method)'
           end
@@ -557,7 +560,7 @@ class CLI
           @tty&.info 'Ensuring ports are powered up'
           @exsys.on(*name_port_list.values)
           sleep(@opts[:'warm-up'])
-          
+
           @tty&.info "Parallelizing jobs"
           # in_threads, not the default.  Parallel.map with no option
           # runs in_processes: the children fork, run this block, and
@@ -578,12 +581,12 @@ class CLI
                                transport: self.transport(name),
                                work_area: self.work_area(name))
           end
-          
+
         when 'usb'
           @tty&.info 'Ensuring ports are powered up'
 
           # @exsys.on(*name_port_list.values)
-          name_port_list.values.each do |port|
+          name_port_list.each_value do |port|
              @exsys.on(port)
           end
           sleep(@opts[:'warm-up'])
@@ -611,7 +614,7 @@ class CLI
                              transport: self.transport(name),
                              work_area: self.work_area(name))
           end
-          
+
         when 'power'
           off_ports = self.offable(force: @opts[:force])
 
@@ -624,10 +627,10 @@ class CLI
           @tty&.info "Turning off ports: #{off_ports.join(' ')}"
           @exsys.off(*off_ports)
           sleep(1)
-          
+
           name_port_list.map do |name, port|
             @tty&.info "Selectively turning on device #{name}"
-            @exsys.on(port) 
+            @exsys.on(port)
             sleep(@opts[:'warm-up'])
             block.call(name, interface: self.interface(name),
                              target: self.target(name),
@@ -641,11 +644,11 @@ class CLI
                          ' devlist protects it'
             end
           end
-          
+
         else raise 'unsupported flashing method'
         end
     end
-    
+
     # The openocd binary, resolved and checked once.
     #
     # Without this the first sign of a missing or mistyped --openocd is
@@ -689,21 +692,21 @@ class CLI
       cmd += [ '-c', "adapter serial #{serial}"              ] if serial
       cmd += commands.flat_map {|c| [ '-c', c ] }
       cmd += [ '-c', 'shutdown'                              ]
-      
+
       @tty&.debug Shellwords.shelljoin(cmd)
-      
+
       output, pstatus = Open3.capture2e(*cmd)
       ok              = pstatus.exitstatus.zero?
-      
+
       block.call(ok, output) if block
       ok
-    end          
+    end
 
         # Argument parsing
     def parse(argv)
         # Parsed option holder
-        opts = { }.merge(Defaults)
-        
+        opts = {}.merge(Defaults)
+
         # Parse global options
         GlobalParser.order!(argv, into: opts)
 
@@ -725,11 +728,11 @@ class CLI
         cmdname = argv.shift
         raise Error, "command missing" if cmdname.nil?
         cmdk    = CLI.find_command_class(cmdname)
-        raise Error, "command \'#{cmdname}\' is not recognized" if cmdk.nil?
+        raise Error, "command '#{cmdname}' is not recognized" if cmdk.nil?
 
         # Parse command, and run it
         if cmdk.const_defined?(:Defaults)
-            opts.merge!(cmdk::Defaults) {|k, o, n| o }
+            opts.merge!(cmdk::Defaults) {|_k, o, _n| o }
         end
         if cmdk.const_defined?(:Parser)
             cmdk::Parser.order!(argv, into: opts)
@@ -744,11 +747,11 @@ class CLI
                 opts[:method] = cmdk::Methods.first
             end
         end
-        
-        
+
+
         # ExSYS USB hub
-        if ! opts.include?(:device)
-            unless opts[:device] = Platform.exsys_ctrl.first
+        if !opts.include?(:device)
+            unless (opts[:device] = Platform.exsys_ctrl.first)
                 raise Error, "Unable to auto-detect ExSYS hub device"
             end
         end
@@ -864,7 +867,7 @@ class CLI
             end
         end
 
-        
+
         # Instanciate USB hub control
         #
         # No wrapper of ours: exsys holds an exclusive lock on the
@@ -907,16 +910,16 @@ class CLI
                 config.output = outputs
             end
         end
-        
+
         # Save parsing results
         @argv = argv
         @opts = opts
         @cmdk = cmdk
-        
+
         # Chainable
         self
     end
-    
+
     # Run command line
     def run
         return nil if @cmdk.nil?
@@ -935,9 +938,9 @@ class CLI
                       " will be applied after device power-on"
         end
 
-        @cmdk::new(self).run(@argv, **@opts)
+        @cmdk.new(self).run(@argv, **@opts)
     end
-    
+
 end
 
 end

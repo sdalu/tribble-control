@@ -75,4 +75,5 @@ Gem::Specification.new do |spec|
     # own, which is a trap worth naming even though nothing here mocks.
     spec.add_development_dependency 'minitest', '~> 5'
     spec.add_development_dependency 'rake'
+    spec.add_development_dependency 'rubocop'
 end

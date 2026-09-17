@@ -19,7 +19,7 @@ module DevlistHelper
     # its devlist interrogated without a hub existing.
     # +argv+ are global options; +command+ is the one parse insists on
     # having, and 'usb' is the one that reaches the hub for nothing.
-    def cli_for(devlist, *argv, command: 'usb', device: '/dev/null')
+    def cli_for(devlist, *argv, command: 'usb', device: File::NULL)
         file = File.join(Dir.mktmpdir('tribe-test'), 'devlist.conf')
         File.write(file, devlist)
         @tmpdirs = (@tmpdirs || []) << File.dirname(file)

@@ -1,17 +1,232 @@
-# tribe-control uses endless method definitions and `in` pattern matching,
-# both 3.0+. Without this, rubocop defaults to TargetRubyVersion 2.7, fails
-# to parse the file, and reports 41 Lint/Syntax offences that are artefacts
-# of the wrong parser: the run looks thorough and evaluates no real cop at
-# all. The bench Pi runs 3.1.
+# What rubocop is for here: catching a new mistake, not relitigating a
+# settled style.
+#
+# It used to report 979 offences, which is the same as reporting none --
+# nobody reads a thousand-line complaint, so a real finding underneath
+# it would never have been seen. Almost all of them were this file's
+# own conventions: four-space indent, `[ 1, 2 ]`, `{|k,v| ... }`,
+# aligned `=`, long methods carrying long comments. Those are decided.
+# What is configured below is that decision, so that a non-zero count
+# means something happened.
+#
+# The offences that WERE real got fixed rather than configured away:
+# trailing whitespace, block arguments named and unused, assignments in
+# conditions now parenthesised to say they are deliberate, two dead
+# &block parameters, an EOFError shadowed by IOError, and arithmetic
+# parenthesised for the reader.
+
 AllCops:
+  # tribe-control uses endless method definitions and `in` pattern
+  # matching, both 3.0+. Without this, rubocop defaults to
+  # TargetRubyVersion 2.7, fails to parse the file, and reports dozens
+  # of Lint/Syntax offences that are artefacts of the wrong parser: the
+  # run looks thorough and evaluates no real cop at all. The bench Pi
+  # runs 3.1.
   TargetRubyVersion: 3.1
   NewCops: enable
   SuggestExtensions: false
   # A bundle vendored in the tree is not this project's code. Without
   # this, a `bundle install` here (the user-level bundler config on this
-  # machine vendors into ./vendors) takes the offence count from about a
-  # thousand to seven and a half, which reads as a catastrophe and is
-  # somebody else's gems.
+  # machine vendors into ./vendors) takes the count from about a
+  # thousand to seven and a half.
   Exclude:
     - 'vendor/**/*'
     - 'vendors/**/*'
+
+### The house style, stated so it stops being reported ##################
+
+# Off, and this is the one trade-off in the file worth knowing about.
+#
+# The classes sit at column 0 inside `module TribeControl` -- what the
+# single script did with its own wrappers, kept when it was split so
+# that not one of 1800 lines had to be re-indented. This cop's first
+# complaint is therefore structural, 27 of them, and there is no way to
+# tell it that a module body here is deliberately unindented. Turning
+# it on means re-indenting the whole tree for no behaviour.
+#
+# The cost: it also saw 16 places where the file indents by 2 rather
+# than 4 -- each_device and openocd in cli.rb, a few blocks in the
+# commands -- inherited from the script. Those are a real
+# inconsistency, and they are now unflagged. Known, not unseen.
+Layout/IndentationWidth:
+  Enabled: false
+Layout/IndentationConsistency:
+  Enabled: false
+
+# `[ 1, 2 ]` and `{ :a => 1 }`, `{|k, v| ... }` without the inner space.
+Layout/SpaceInsideArrayLiteralBrackets:
+  EnforcedStyle: space
+Layout/SpaceInsideHashLiteralBraces:
+  EnforcedStyle: space
+# `{|k, v| v }` -- no space after the brace, none before the
+# parameters, one before the closing brace.
+Layout/SpaceInsideBlockBraces:
+  EnforcedStyle: space
+  SpaceBeforeBlockParameters: false
+
+# Aligned `=` and aligned trailing comments are the point, not an error.
+Layout/SpaceAroundOperators:
+  AllowForAlignment: true
+Layout/CommentIndentation:
+  Enabled: false
+Layout/ArgumentAlignment:
+  Enabled: false
+Layout/MultilineMethodCallIndentation:
+  Enabled: false
+Layout/FirstArgumentIndentation:
+  Enabled: false
+Layout/ClosingParenthesisIndentation:
+  Enabled: false
+Layout/MultilineOperationIndentation:
+  Enabled: false
+
+# A continued string keeps its leading space inside the quotes:
+#     'a sentence that carries on' \
+#     ' onto the next line'
+Layout/LineContinuationLeadingSpace:
+  Enabled: false
+
+# Blank lines inside a module body separate the file's sections.
+Layout/EmptyLinesAroundModuleBody:
+  Enabled: false
+Layout/EmptyLinesAroundClassBody:
+  Enabled: false
+Layout/EmptyLineAfterGuardClause:
+  Enabled: false
+Layout/EmptyLineBetweenDefs:
+  Enabled: false
+
+Layout/LineLength:
+  Max: 100
+
+# `{|k,v| ...}`, `def f(a, b=1)`, `def x = nil ; end`, and a double
+# blank line between sections: all of them throughout, all of them
+# deliberate.
+Layout/SpaceAfterComma:                   { Enabled: false }
+Layout/SpaceBeforeSemicolon:              { Enabled: false }
+Layout/EmptyLines:                        { Enabled: false }
+Layout/BlockAlignment:                    { Enabled: false }
+Layout/BlockEndNewline:                   { Enabled: false }
+Layout/MultilineBlockLayout:              { Enabled: false }
+Layout/LineContinuationSpacing:           { Enabled: false }
+Layout/ElseAlignment:                     { Enabled: false }
+Layout/EndAlignment:                      { Enabled: false }
+Layout/CaseIndentation:                   { Enabled: false }
+Layout/FirstHashElementIndentation:        { Enabled: false }
+Layout/FirstArrayElementIndentation:       { Enabled: false }
+Layout/HashAlignment:                     { Enabled: false }
+Layout/MultilineHashBraceLayout:          { Enabled: false }
+Layout/MultilineArrayBraceLayout:         { Enabled: false }
+Layout/MultilineMethodCallBraceLayout:    { Enabled: false }
+Layout/RescueEnsureAlignment:             { Enabled: false }
+Layout/SpaceInsideParens:                 { Enabled: false }
+Layout/SpaceBeforeBlockBraces:            { Enabled: false }
+
+# Dev dependencies are declared in the gemspec here, not split between
+# it and the Gemfile, because the Gemfile is one line: `gemspec`.
+Gemspec/DevelopmentDependencies:          { Enabled: false }
+
+# `run` is one interface across five commands. Three of them return a
+# boolean because the fold over each_device says whether every board
+# succeeded; none of them should be called `run?`.
+Naming/PredicateMethod:                   { Enabled: false }
+Naming/MethodParameterName:               { Enabled: false }
+
+### Deliberate idioms ###################################################
+
+# `self.method` reads as "the CLI's own", which is worth the four
+# characters in a file where a bare name could be a local.
+Style/RedundantSelf:
+  Enabled: false
+
+# Defaults, Parser, Methods: class-level declarations, not values.
+Naming/ConstantName:
+  Enabled: false
+
+# Long methods with long comments are this codebase's whole character.
+# A limit would either be violated everywhere or force the reasoning
+# out of the code and into nowhere.
+Metrics:
+  Enabled: false
+
+# `if cond \n then a \n else b \n end`, aligned, is used throughout.
+Lint/ElseLayout:
+  Enabled: false
+
+# run(argv, **opts) is one interface across five commands; the one
+# that ignores its options still has to accept them.
+Lint/UnusedMethodArgument:
+  AllowUnusedKeywordArguments: true
+
+# An explicit sort documents intent even where Dir already guarantees
+# it, and the guarantee is version-dependent.
+Lint/RedundantDirGlobSort:
+  Enabled: false
+
+Style/Documentation:              { Enabled: false }
+Style/FrozenStringLiteralComment: { Enabled: false }
+Style/StringLiterals:             { Enabled: false }
+Style/StringLiteralsInInterpolation: { Enabled: false }
+Style/BlockDelimiters:            { Enabled: false }
+Style/IfUnlessModifier:           { Enabled: false }
+Style/Semicolon:                  { Enabled: false }
+Style/MutableConstant:            { Enabled: false }
+Style/StringConcatenation:        { Enabled: false }
+Style/FormatStringToken:          { Enabled: false }
+Style/PerlBackrefs:               { Enabled: false }
+Style/SingleArgumentDig:          { Enabled: false }
+Style/WordArray:                  { Enabled: false }
+Style/HashSyntax:                 { EnforcedStyle: no_mixed_keys }
+Style/SymbolArray:                { Enabled: false }
+Style/TernaryParentheses:         { Enabled: false }
+Style/GuardClause:                { Enabled: false }
+Style/SoleNestedConditional:      { Enabled: false }
+Style/CaseLikeIf:                 { Enabled: false }
+Style/SafeNavigation:             { Enabled: false }
+Style/HashExcept:                 { Enabled: false }
+Style/ParallelAssignment:         { Enabled: false }
+Style/NegatedIf:                  { Enabled: false }
+Style/RescueStandardError:        { Enabled: false }
+Style/SpecialGlobalVars:          { Enabled: false }
+Style/ClassVars:                  { Enabled: false }
+
+# Alignment is pervasive and deliberate: option descriptions in a
+# column, `=` lined up down a block of assignments. AllowForAlignment
+# only covers the cases where an adjacent line aligns the same token,
+# which is not how most of it is written.
+Layout/ExtraSpacing:                      { Enabled: false }
+Layout/SpaceAroundEqualsInParameterDefault: { Enabled: false }
+Layout/HeredocIndentation:                { Enabled: false }
+Style/AccessorGrouping:                   { Enabled: false }
+
+# The gem is tribe-control, so its entry point is tribe-control.rb.
+Naming/FileName:                          { Enabled: false }
+
+# each_device yields (name, options) pairs from an enumerator, not a
+# hash, and this cop reads the destructuring as one.
+Style/HashEachMethods:                    { Enabled: false }
+
+# Two passes over the devlist, each with its own message: one says a
+# type is undefined, the other that a port is claimed twice. Combined,
+# neither could say which it found.
+Style/CombinableLoops:                    { Enabled: false }
+
+# %r{} where the pattern contains a slash, // otherwise.
+Style/RegexpLiteral:                      { EnforcedStyle: mixed }
+
+# Endless method definitions: `def summary = nil`. Ruby 3, and used
+# throughout for one-line readers.
+Style/SingleLineMethods:                  { Enabled: false }
+Style/EndlessMethod:                      { Enabled: false }
+
+# rubygems_mfa_required tells rubygems.org to demand a second factor
+# for a push. allowed_push_host above is 'none' because this gem is
+# installed from a checkout and never pushed anywhere, so the metadata
+# would govern nothing. Autocorrect added it once, unindented, inside
+# the block -- technically satisfying and substantively empty.
+Gemspec/RequireMFA:                       { Enabled: false }
+
+# `sysctl(...).select { }.to_h { }` and the udev equivalent: a filter
+# and a projection, which is what reading a device table is. Splitting
+# them would need a name for the half-built intermediate.
+Style/MultilineBlockChain:                { Enabled: false }

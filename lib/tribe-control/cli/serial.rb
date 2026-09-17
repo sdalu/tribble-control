@@ -22,7 +22,7 @@ class Serial < CLI::Command
     # reports its own serial.  It costs a power cycle of the whole
     # bench and leaves it off; see DEVICE SELECTION.
     Methods  = [ 'usb', 'power' ]
-    Defaults = { }
+    Defaults = {}
     Parser   = OptionParser.new do |opts|
         # Usage
         opts.banner = "Usage: #{PROGNAME} serial [options] [PORT|DEVNAME]..."
@@ -53,8 +53,8 @@ class Serial < CLI::Command
                          ' do this; read it on Linux with --method usb'
         end
     end
-    
-    def run(argv, **opts)
+
+    def run(argv, **_opts)
       each_device(argv).map do |name, hopts={}|
             case serial = get_serial(**hopts)
             when String then tty&.success "Serial for #{name}: #{serial}"

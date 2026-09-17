@@ -10,7 +10,7 @@ class Reset < CLI::Command
     OPENOCD     = true
 
     Methods  = [ 'serial' ]
-    Defaults = { }
+    Defaults = {}
     Parser   = OptionParser.new do |opts|
         # Usage
         opts.banner = "Usage: #{PROGNAME} reset [options] [PORT|DEVNAME]..."
@@ -21,11 +21,11 @@ class Reset < CLI::Command
         opts.separator ''
     end
 
-    def reset(**hopts, &block)
+    def reset(**hopts)
         openocd('init', 'targets', 'reset run', **hopts)
     end
-    
-    def run(argv, **opts)
+
+    def run(argv, **_opts)
         each_device(argv).map do |name, hopts={}|
             reset(**hopts).tap do |ok|
                 if ok
