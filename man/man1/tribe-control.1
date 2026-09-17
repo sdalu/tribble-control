@@ -178,10 +178,13 @@ keeps it elsewhere (FreeBSD: /usr/local/bin).
 Checked before any port is switched, by the commands that always need
 it.
 .It Fl -debug Ns Oo = Ns Ar FILE Oc
-Raise the log level to debug.
-The
-.Ar FILE
-argument is accepted and ignored.
+Show debug output \(em chiefly the openocd command line issued for each
+board, which is the thing worth having when a flash behaves oddly.
+With
+.Ar FILE ,
+the whole log is copied there as well as shown, appending, so a long
+run can be kept without being watched.
+An unwritable path is refused before any port is switched.
 .It Fl v , Fl -verbose , Fl -no-verbose
 Run verbosely.
 .It Fl V , Fl -version
@@ -915,9 +918,14 @@ Check which tally the board is using
 and that the firmware is logging at all before concluding the radio is
 dead; \-\-command is how a log level is raised at run time.
 .Pp
-\-\-debug takes an optional FILE which is ignored.
-The flag only raises the
-log level to debug; output still goes to the terminal.
+\-\-debug used to do nothing at all.
+The logger was built at debug level, so the openocd command lines the
+flag exists to reveal were printed on every run whether it was given or
+not, and the FILE it documented was accepted and dropped.
+Both are fixed: the default is quiet, \-\-debug is what makes it
+verbose, and \-\-debug=FILE also writes the log where it says.
+If you have a script that greps a run for its openocd invocations, it
+now has to ask for them.
 .Pp
 FreeBSD is half usable.
 Hub auto\-detection, exsys_ctrl and

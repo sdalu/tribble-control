@@ -128,7 +128,8 @@ class CLI
                 'Ruby file(s) to load first, for the tallies',
                 '  they register (comma-separated)'
         opts.on '-F', '--force',           'Switch undeclared ports too'
-        opts.on       '--debug[=FILE]',    'Debug output file'
+        opts.on       '--debug[=FILE]', 'Show debug output, and copy',
+                                       'the whole log to FILE if given'
         opts.on '-v', '--[no-]verbose',    'Run verbosely'
         opts.on '-V', '--version',         'Version' do
             puts "tribe-control : #{TribeControl::VERSION}"
@@ -265,8 +266,12 @@ class CLI
         @undeclared    = :protect
         @tally_default = TALLY_DEFAULT
         @types         = {}
+        # :info, not :debug.  This was built at :debug, which made
+        # --debug a flag that changed nothing -- the openocd command
+        # lines it is supposed to reveal were printed on every run
+        # whether it was given or not.
         @tty     = TTY::Logger.new do |config|
-            config.level = :debug
+            config.level = :info
         end
     end
 
@@ -872,10 +877,34 @@ class CLI
         # of --method power -- must not hold the line across its sleeps.
         @exsys = ExSYS::ManagedUSB.new(opts[:device], opts[:password])
 
-        # Debug
+        # Debug, and the FILE it was documented to take.
+        #
+        # --debug[=FILE] accepted a filename and dropped it: the manual
+        # said so under TRAPS and nobody had made it true either way.
+        # It is honoured now -- the log goes to the terminal as before
+        # AND to the file, so a capture can be kept without watching it
+        # go past.  Opened before anything is switched, because finding
+        # out that a path is unwritable after a bench has been powered
+        # down is finding out too late.
         if opts.include?(:debug)
-            @tty.configure do |config|
-                config.level = :debug
+            outputs = [ $stderr ]
+            if (file = opts[:debug])
+                begin
+                    @debug_io = File.open(file, 'a')
+                    @debug_io.sync = true
+                rescue SystemCallError => e
+                    raise Error, "cannot write the debug log to #{file}:" \
+                                 " #{e.message}"
+                end
+                outputs << @debug_io
+            end
+            # A new logger, not configure() on the old one: tty-logger
+            # 0.6 builds its handlers when the logger is constructed
+            # and #configure does not revisit the level, so the call
+            # that used to be here changed nothing whatever.
+            @tty = TTY::Logger.new do |config|
+                config.level  = :debug
+                config.output = outputs
             end
         end
         
