@@ -35,13 +35,20 @@
 #                     reported ok=0, tx-rate=NaN, which reads exactly like
 #                     a board that is up and silent
 #
-# Usage: sh test-tribe-control [host] [tribe-control-path]
+# Usage: sh test-tribe-control [host] [tribe-control-path] [tally-path]
 #
-# The second argument exists so the suite can be pointed at a deliberately
-# broken copy: a test that has never been seen to fail is not evidence.
+# tribe-control is installed as a gem on the hub host, so the default is
+# the bare name and PATH answers it. The second argument exists so the
+# suite can be pointed at a deliberately broken copy: a test that has
+# never been seen to fail is not evidence.
+#
+# The third is the tally. The bench's devlist says `tally = twr`, which
+# a file loaded with -r registers, so a command that reads a console has
+# to name it. Nothing else here builds a tally, so nothing else needs it.
 set -e
 host=${1:-134.214.146.186}
-tc=${2:-/root/tribe-control/bin/tribe-control}
+tc=${2:-tribe-control}
+tally=${3:-/root/twr-tally.rb}
 dl=/root/devlist.conf
 fail=0
 
@@ -188,7 +195,8 @@ status "reset exits 0 on a board it can reach" 0 \
 ssh -o BatchMode=yes "root@$host" \
     "printf 'X9 {\\n  interface = jlink\\n  baud = 115200\\n  port = 11\\n}\\n' | cat $dl - > /tmp/t-empty.conf"
 say "a port with no board is reported, not captured silently" \
-    "no console enumerated" "$tc -D /tmp/t-empty.conf connect --duration 1 X9"
+    "no console enumerated" \
+    "$tc -D /tmp/t-empty.conf -r $tally connect --duration 1 X9"
 
 # The power-cycle gate, which is the one test here that writes flash.
 #
