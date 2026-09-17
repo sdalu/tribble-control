@@ -1,5 +1,14 @@
-# The bundle is installed on the hub host, not kept here.
+# A gem does not commit its lock: it is a library, and the one thing
+# that used to read this one -- a bundle vendored on the hub host --
+# went away when the bench started installing the built gem instead.
+# Keeping it pinned a bundler version and an architecture belonging to
+# one Raspberry Pi, and corrupted itself every time anyone here ran
+# `bundle install`.
+/Gemfile.lock
+
+# The bundle, wherever someone chooses to vendor one.
 /vendor/
+/vendors/
 /.bundle/
 /bin/
 

@@ -72,6 +72,9 @@ dependencies with it and needs nothing else:
     rake install                 # from a checkout
     gem install tribe-control-0.1.0.gem   # from `rake build`
 
+`Gemfile.lock` is deliberately not committed: this is a library, and
+the bench installs the built gem rather than a vendored bundle.
+
 Or, on a host that should not gain gems system-wide, deploy the
 checkout and vendor the bundle beside it:
 
