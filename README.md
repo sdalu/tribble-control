@@ -102,15 +102,29 @@ the wrong ports.
 Tests
 -----
 
-    sh test/test-tribe-control [host] [tribe-control-path]
-    rake test                        # same, via TRIBE_HOST/TRIBE_PATH
+    sh test/test-tribe-control HOST [tribe-control-path] [tally-path]
+    TRIBE_HOST=<host> rake test      # also TRIBE_PATH, TRIBE_TALLY
 
-The suite runs against a deployed copy, because the gems are on the hub
-host.  Everything it asserts by default is decided during device-list
-parsing, before the hub object is built, so those tests never reach the
-hub.  The flash and power-cycle tests are behind `TRIBE_TEST_FLASH=1`
-because they write flash.
+The suite runs against a **deployed** copy: it drives the hub host over
+ssh, because that is the machine with the hub on the end of a serial
+line.  There is no default host — one lab's address does not belong in
+a tool meant to drive any ExSYS hub — so it refuses to start without
+one.
 
-The second argument exists so the suite can be pointed at a
-deliberately broken copy: a test that has never been seen to fail is
-not evidence.
+Most of what it asserts is decided during device-list parsing, before
+the hub object is built, so those tests never reach the hub.  Of the
+rest, one resets a board (deliberately, as a positive control: without
+it the two tests either side would pass on a tool that failed
+everything) and two power ports up, which is the benign direction.
+Nothing writes flash or switches a port off unless `TRIBE_TEST_FLASH=1`
+asks for the power-cycle gate.
+
+The second argument points it at a different copy of the tool — a
+deliberately broken one, say, since a test that has never been seen to
+fail is not evidence.  The third names the tally, which any command
+that opens a console needs when the devlist asks for one by name.
+
+What stays specific to one bench, on purpose, is that bench's
+inventory: the board names, a probe serial, a USB path, the flash page
+the gate writes.  Each names a particular board on a particular hub,
+and pointing the suite at another bench means editing them.
