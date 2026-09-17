@@ -571,7 +571,7 @@ usb        (none: acts on ports)     n/a
 serial     usb                       usb
 flash      serial, power             serial
 reset      serial                    serial
-connect    usb                       usb
+connect    usb, serial               usb
 .Ed
 .Pp
 \-\-method usb derives the board's USB location from the hub's own geometry,
@@ -929,36 +929,33 @@ now has to ask for them.
 .Pp
 FreeBSD is half usable.
 Hub auto\-detection, exsys_ctrl and
-daplink_mapping all work there.
+probe_consoles all work there.
 Note that openocd is not at
 /usr/bin/openocd there: pass \-\-openocd=/usr/local/bin/openocd, or just
 \-\-openocd=openocd and let PATH answer.
 .Pp
 What remains Linux\-only is port_to_usb, usb_to_tty and usb_to_serial,
 which read /sys/bus/usb.
-That rules out \-\-method usb, and with it both commands that select
-that way and no other:
-.Ic connect
-and
-.Ic serial .
+That rules out \-\-method usb there, and each of the three says which
+piece is missing rather than dying on NoMethodError.
 .Pp
-So on FreeBSD:
-.Ic usb ,
-.Ic flash
-and
-.Ic reset
-work, and
-.Ic serial
-and
 .Ic connect
-do not.
-Each of the three missing pieces says so by name rather than dying on
-NoMethodError \(em which is what
-.Ic connect
-did until 2026\-09\-17, when this was first run on a FreeBSD host and
-the paragraph you are reading turned out to have promised
+works anyway, with
+.Fl m Cm serial :
+the console is found by the serial of the probe in front of the board,
+which both a DAPLink and a J\-Link OB report, and which the devlist
+already carries in order to address that board for flashing.
+No USB tree is walked, so nothing in that path is Linux\-only.
+Measured on FreeBSD 15 against an nRF52840 on 2026\-09\-17: console
+opened, Zephyr shell read, lines counted.
+.Pp
 .Ic serial
-as well.
+is the one command that cannot work there, for a reason no amount of
+platform code removes: it exists to READ a probe's serial off a board
+picked out by its hub port, so it needs precisely the port\-to\-device
+mapping that /sys/bus/usb provides and FreeBSD does not.
+Read the serials once on a Linux host, put them in the devlist, and
+everything else follows on either.
 .Pp
 \-\-method usb trusts the 4\-by\-4 geometry.
 A board on port 16 would resolve

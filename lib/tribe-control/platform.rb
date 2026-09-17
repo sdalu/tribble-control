@@ -11,6 +11,13 @@ module TribeControl
 # Sysctl quick parsing
 #
 module Platform
+
+# Vendor ids of the debug probes a bench carries: NXP/mbed for DAPLink
+# (as on an nRF52840-MDK), SEGGER for a J-Link OB (as on a DWM1001-DEV).
+# Both present their console as a CDC interface reporting the PROBE's
+# own serial, which is what makes a serial the key to a console.
+PROBE_VENDORS = %w[0d28 1366].freeze
+
 module FreeBSD
     def self.exsys_ctrl
         self.sysctl('dev.uftdi').select {|k, v|
@@ -59,11 +66,19 @@ module FreeBSD
                           " #{LINUX_ONLY}"
     end
 
-    def self.daplink_mapping
+    # Every debug probe's console, keyed by the probe's serial.
+    #
+    # This is how a console is found without walking the USB tree,
+    # which is what /sys/bus/usb gives Linux and FreeBSD has no
+    # equivalent of: the probe reports its own serial, the devlist
+    # already carries that serial to address the board for flashing,
+    # and umodem says which tty the probe's CDC interface became.
+    def self.probe_consoles
         self.sysctl('dev.umodem').select {|k, v|
-            v.dig(:'%pnpinfo') in { vendor: "0x0d28", product: "0x0204" }
+            vendor = v.dig(:'%pnpinfo', :vendor).to_s.delete_prefix('0x')
+            PROBE_VENDORS.include?(vendor)
         }.to_h {|k, dev|
-            [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev.dig(:ttyname) ] 
+            [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev.dig(:ttyname) ]
         }
     end
 
@@ -96,14 +111,13 @@ module Linux
             .map    {|dev| dev[:DEVNAME] }
     end
 
-    # DAPLink consoles by probe serial.  Matched on the mbed VID:PID
-    # (0d28:0204), which is the probe firmware's and not any one board
-    # family's -- an MDK and anything else carrying DAPLink both answer
-    # to it.
-    def self.daplink_mapping
+    # See FreeBSD.probe_consoles.  Matched on the probe's vendor, not
+    # on one probe firmware: an MDK's DAPLink and a DWM1001-DEV's
+    # J-Link OB both report a serial and both become a ttyACM.
+    def self.probe_consoles
         Dir['/sys/class/tty/ttyACM*']
             .map    {|path| self.udevadm_query(path) }
-            .select {|dev| dev in {ID_VENDOR_ID: '0d28', ID_MODEL_ID: '0204'} }
+            .select {|dev| PROBE_VENDORS.include?(dev[:ID_VENDOR_ID]) }
             .to_h   {|dev| [ dev[:ID_SERIAL_SHORT], dev[:DEVNAME] ] }
     end
 
@@ -134,11 +148,6 @@ module Linux
             File.join('/dev', File.basename(dev_path))
         end
     end
-
-    # Vendor ids of the debug probes this bench carries: NXP/mbed for the
-    # DAPLink (as carried by the bench's nRF52840-MDKs), SEGGER for a
-    # J-Link OB (as on a DWM1001-DEV).
-    PROBE_VENDORS = %w[0d28 1366].freeze
 
     # The probe's serial, from the USB descriptor the kernel already has.
     #
@@ -185,7 +194,17 @@ Current = case RbConfig::CONFIG['host_os']
 
 
 def self.exsys_ctrl(...)       = Current.exsys_ctrl(...)
-def self.daplink_mapping(...) = Current.daplink_mapping(...)
+def self.probe_consoles(...)   = Current.probe_consoles(...)
+
+# The console of the board whose probe carries this serial, or nil.
+#
+# Works on both platforms and needs no USB topology, which is what lets
+# `connect --method serial` reach a console on a host with no
+# /sys/bus/usb.
+def self.serial_to_tty(serial)
+    return nil if serial.nil?
+    self.probe_consoles[serial.to_s]
+end
 def self.port_to_usb(...)      = Current.port_to_usb(...)
 def self.usb_to_tty(...)       = Current.usb_to_tty(...)
 def self.usb_to_serial(...)    = Current.usb_to_serial(...)

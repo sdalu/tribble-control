@@ -8,7 +8,11 @@ class CLI
 class Connect < CLI::Command
     DESCRIPTION = 'Connect to device'
 
-    Methods  = [ 'usb' ]
+    # usb first, so it stays the default where it works.  serial is
+    # what reaches a console on a host with no /sys/bus/usb: it needs
+    # no topology, only the probe serial the devlist already carries
+    # to address the board for flashing.
+    Methods  = [ 'usb', 'serial' ]
     Defaults = { }
     Parser   = OptionParser.new do |opts|
         # Usage
@@ -34,6 +38,22 @@ class Connect < CLI::Command
         
     end
 
+    # Where this board's console is.
+    #
+    # The USB path first, because it names the device itself and is
+    # what --method usb went to the trouble of working out.  The probe
+    # serial second: it identifies the console just as exactly, needs
+    # no USB tree to be walked, and is therefore the only one of the
+    # two that a FreeBSD host can answer.  nil means neither found it,
+    # which is a board that is not there.
+    def console(hopts)
+        if hopts[:usb] && (path = Platform.usb_to_tty(hopts[:usb]))
+            path
+        else
+            Platform.serial_to_tty(hopts[:serial])
+        end
+    end
+
     def run(argv, **opts)
         if opts[:off]
             off_ports = offable(force: opts[:force])
@@ -53,10 +73,11 @@ class Connect < CLI::Command
           # "ok=0 ... tx-rate=NaN" -- indistinguishable from a board that
           # is up and saying nothing, which is the one question 'connect'
           # exists to answer.
-          dev_tty = Platform.usb_to_tty(hopts[:usb])
+          dev_tty = console(hopts)
           if dev_tty.nil?
+            where = hopts[:usb] || "probe #{hopts[:serial] || '(no serial)'}"
             tty&.error "Device #{name}: no console enumerated at" \
-                       " #{hopts[:usb]}; not capturing it"
+                       " #{where}; not capturing it"
             next
           end
           tty&.info "Connecting to #{name} on #{dev_tty}"
@@ -109,7 +130,7 @@ class Connect < CLI::Command
         if cmd = opts[:command]
             sleep(opts[:reset] ? 2 : 0.5)   # let the shell come up
             connected.each do |name, hopts|
-                dev_tty = Platform.usb_to_tty(hopts[:usb])
+                dev_tty = console(hopts)
                 tty&.info "Sending to #{name}: #{cmd}"
                 begin
                     File.open(dev_tty, File::WRONLY | File::NOCTTY) do |w|
@@ -153,7 +174,7 @@ class Connect < CLI::Command
             raise Error, 'connect: --interactive takes a single device'
         end
         name, hopts = connected.first
-        dev_tty = Platform.usb_to_tty(hopts[:usb])
+        dev_tty = console(hopts)
         tty&.info "Typing at #{name} (^D to leave)"
         File.open(dev_tty, File::WRONLY | File::NOCTTY) do |w|
             w.sync = true
