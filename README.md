@@ -40,7 +40,6 @@ Layout
     lib/tribe-control/         
         version.rb              the one place the version number lives
         platform.rb             Linux/FreeBSD ways of finding hardware
-        serialised-hub.rb       the lock serialising the FT232 line
         tally.rb                the seam where firmware knowledge goes
         cli.rb                  options, devlist, each_device, openocd
         cli/*.rb                one file per command (usb, flash, ...)

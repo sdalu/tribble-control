@@ -626,16 +626,22 @@ the hub acknowledges.
 Selection method: none.
 Exit status: 0, or 1 on error.
 .It Ic serial Oo Ar PORT | DEVNAME Oc ...
-Report each board's CMSIS\-DAP serial number, by running openocd and
-reading the USB descriptor the kernel already holds.
+Report each board's CMSIS\-DAP serial number, read from the USB
+descriptor the kernel already holds.
 Prints one line
 per board, "Serial for alpha: 1026...".
 Use it to populate the devlist.
 .Pp
-Selection method: usb only, so Linux only.
-It powers the boards' own
+Selection methods: usb (default), power.
+Under
+.Cm usb
+it powers the boards' own
 ports up and leaves the rest of the bench alone \(em asking a board its
-serial is not a reason to black out the hub.
+serial is not a reason to black out the hub \(em but it walks the USB
+tree, so it is Linux only.
+.Cm power
+is the one that works anywhere, at the price of cutting the bench; see
+.Sx TRAPS .
 Exit status: 1 if any
 board could not be read.
 .Pp
@@ -899,7 +905,7 @@ without a pipefail or a temporary file.
 .Pp
 \-\-method power leaves every declared board powered off when it finishes.
 Nothing defaults to it any more: flash defaults to serial, reset is
-serial only, and serial and connect are usb only.
+serial only, and serial and connect default to usb.
 You get it by asking
 for it with \-m power, and then you want 'usb on' afterwards to bring the
 bench back.
