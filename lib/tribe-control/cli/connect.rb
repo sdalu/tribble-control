@@ -27,7 +27,7 @@ class Connect < CLI::Command
         opts.on '--duration=SECONDS', Integer,
                 'How long to capture for (default 600)'
         opts.on '--command=CMD', 'Shell command to send to every selected' \
-                                 ' board once it is up (eg. spank syslog info)'
+                                 " board's own console once it is up"
         opts.on '--interactive', 'Type at the board: forward this' \
                                  ' standard input to it, and stay until' \
                                  ' end of input rather than for a duration'

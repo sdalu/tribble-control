@@ -329,6 +329,25 @@ calls the chip on a board of another family.
 Used wherever interface= is.
 The two are independent: the probe says how to reach the chip, the
 target says which chip it is.
+.It Cm transport
+The transport openocd selects:
+.Cm swd
+(the default) or whatever the chip and the probe both speak, commonly
+.Cm jtag .
+.Cm none
+selects nothing and leaves the choice to the interface script.
+Making
+.Cm target
+a key and leaving this one fixed would be half a fix: a chip reached
+over JTAG would take the right target script and then fail on a
+transport it has not got.
+.It Cm work_area
+How much target RAM openocd may borrow for its flash algorithms,
+default 0x4000, written as openocd wants it.
+.Cm none
+says nothing and leaves the target script to choose.
+16 KB is nothing to a large part and more than some have in total, so
+it belongs to the chip rather than to this tool.
 .It Cm baud
 The console speed
 .Ic connect
@@ -571,7 +590,7 @@ adapters by itself.
 .It Ic flash Ar FIRMWARE Oo Ar PORT | DEVNAME Oc ...
 openocd 'flash write_image erase FIRMWARE' then 'reset run', against
 the board's target= script (nrf52 by default) over its interface=
-script (cmsis\-dap by default) with SWD.
+script (cmsis\-dap by default), on its transport= (swd by default).
 FIRMWARE is resolved by
 openocd relative to the current directory.
 Every selected board is attempted even if an earlier one failed; the

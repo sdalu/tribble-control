@@ -35,7 +35,8 @@
 #                     reported ok=0, tx-rate=NaN, which reads exactly like
 #                     a board that is up and silent
 #
-# Usage: sh test-tribe-control [host] [tribe-control-path] [tally-path]
+# Usage: sh test-tribe-control HOST [tribe-control-path] [tally-path]
+#    or: TRIBE_HOST=<host> sh test-tribe-control
 #
 # tribe-control is installed as a gem on the hub host, so the default is
 # the bare name and PATH answers it. The second argument exists so the
@@ -46,7 +47,24 @@
 # a file loaded with -r registers, so a command that reads a console has
 # to name it. Nothing else here builds a tally, so nothing else needs it.
 set -e
-host=${1:-134.214.146.186}
+
+# No default host. One lab's address does not belong in a tool that is
+# meant to drive any ExSYS hub, and a suite that silently aims at
+# somebody else's bench is worse than one that refuses to start. Give
+# it as the first argument or in TRIBE_HOST.
+#
+# The rest of what is baked in below IS this bench's inventory, on
+# purpose: board names (DB, D4, B1), DB's probe serial and its USB
+# path, the flash page the power-cycle gate writes. Every one of them
+# names a specific board on a specific hub, and a test that did not
+# would not be testing anything. Editing them is what pointing this
+# suite at another bench means.
+host=${1:-${TRIBE_HOST:-}}
+if [ -z "$host" ]; then
+    printf 'usage: %s HOST [tribe-control-path] [tally-path]\n' "$0" >&2
+    printf '   or: TRIBE_HOST=<host> %s\n' "$0" >&2
+    exit 2
+fi
 tc=${2:-tribe-control}
 tally=${3:-/root/twr-tally.rb}
 dl=/root/devlist.conf

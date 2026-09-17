@@ -5,8 +5,11 @@ require 'bundler/gem_tasks'
 # things that change: which host, and where the binstub is on it.
 desc 'Run the regression suite against the deployed copy'
 task :test do
+    # The suite refuses to start without a host: one lab's address does
+    # not belong in the repository.  TRIBE_HOST or the first argument.
     sh 'sh', 'test/test-tribe-control',
-       ENV.fetch('TRIBE_HOST', ''), ENV.fetch('TRIBE_PATH', '')
+       ENV.fetch('TRIBE_HOST', ''), ENV.fetch('TRIBE_PATH', ''),
+       ENV.fetch('TRIBE_TALLY', '')
 end
 
 # RubyGems has no notion of a man page: `gem install` copies the file

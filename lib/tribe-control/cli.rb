@@ -320,6 +320,33 @@ class CLI
         self.attribute(id, 'target', 'nrf52').to_s
     end
 
+    # The SWD/JTAG transport openocd selects, or 'none' to select
+    # nothing and let the interface script decide.
+    #
+    # Making target= a key and leaving this one a constant would have
+    # been half a fix: a chip reached over JTAG takes the right target
+    # script and then fails on a transport it does not have.
+    def transport(id)
+        self.attribute(id, 'transport', 'swd').to_s
+    end
+
+    # Target RAM openocd may borrow for its flash algorithms, or 'none'
+    # to say nothing and let the target script choose.
+    #
+    # 16 KB is nothing to an nRF52840 and more than some parts have in
+    # total, so it is a property of the chip rather than of this tool.
+    # Written as openocd wants it, in hex.
+    def work_area(id)
+        v = self.attribute(id, 'work_area', 0x4000)
+        return nil if PORT_NONE.include?(v.is_a?(String) ? v.downcase : v)
+        begin
+            Integer(v)
+        rescue TypeError, ArgumentError
+            raise Error, "devlist entry '#{id}' has work_area = #{v.inspect}," \
+                         ' which is neither a size nor none'
+        end
+    end
+
     # Console baud rate of a board (230400 on the bench's MDK firmware,
     # 115200 on the stock DWM1001-DEV devicetree)
     def baud(id)
@@ -509,7 +536,9 @@ class CLI
                        in_threads: [ name_port_list.size, 1 ].max) do |name|
               block.call(name, serial: self.serial(name),
                                interface: self.interface(name),
-                               target: self.target(name))
+                               target: self.target(name),
+                               transport: self.transport(name),
+                               work_area: self.work_area(name))
           end
           
         when 'usb'
@@ -540,7 +569,9 @@ class CLI
             # with no serial= behaves exactly as before.
             block.call(name, usb: usb, serial: self.serial(name),
                              interface: self.interface(name),
-                             target: self.target(name))
+                             target: self.target(name),
+                             transport: self.transport(name),
+                             work_area: self.work_area(name))
           end
           
         when 'power'
@@ -561,7 +592,9 @@ class CLI
             @exsys.on(port) 
             sleep(@opts[:'warm-up'])
             block.call(name, interface: self.interface(name),
-                             target: self.target(name))
+                             target: self.target(name),
+                             transport: self.transport(name),
+                             work_area: self.work_area(name))
           ensure
             if self.offable?(port)
               @exsys.off(port)
@@ -603,11 +636,16 @@ class CLI
     end
 
     def openocd(*commands, usb: nil, serial: nil,
-                interface: 'cmsis-dap', target: 'nrf52', &block)
+                interface: 'cmsis-dap', target: 'nrf52',
+                transport: 'swd', work_area: 0x4000, &block)
       cmd  = [ self.openocd_path ]
-      cmd += [ '-c', 'set WORKAREASIZE 0x4000'               ]
+      if work_area
+          cmd += [ '-c', format('set WORKAREASIZE 0x%x', work_area) ]
+      end
       cmd += [ '-c', "source [find interface/#{interface}.cfg]" ]
-      cmd += [ '-c', 'transport select swd'                  ]
+      unless transport.nil? || PORT_NONE.include?(transport)
+          cmd += [ '-c', "transport select #{transport}"     ]
+      end
       cmd += [ '-c', "source [find target/#{target}.cfg]"    ]
       cmd += [ '-c', "adapter usb location #{usb}"           ] if usb
       cmd += [ '-c', "adapter serial #{serial}"              ] if serial
