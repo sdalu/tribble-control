@@ -1,0 +1,9 @@
+# tribe-control uses endless method definitions and `in` pattern matching,
+# both 3.0+. Without this, rubocop defaults to TargetRubyVersion 2.7, fails
+# to parse the file, and reports 41 Lint/Syntax offences that are artefacts
+# of the wrong parser: the run looks thorough and evaluates no real cop at
+# all. The bench Pi runs 3.1.
+AllCops:
+  TargetRubyVersion: 3.1
+  NewCops: enable
+  SuggestExtensions: false

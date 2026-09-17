@@ -1,0 +1,7 @@
+# The bundle is installed on the hub host, not kept here.
+/vendor/
+/.bundle/
+
+# Capture logs and firmware images land wherever the tool is run.
+*.log
+*.hex

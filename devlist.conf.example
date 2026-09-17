@@ -1,0 +1,68 @@
+# -*- conf -*-
+#
+# Which device sits on which hub port, and how to reach it.  Copy this
+# beside your own setup's configuration, edit it, and point
+# tribe-control at it with -D/--devlist.
+#
+# See `tribe-control --man`: DEVLIST for every key, PROTECTED PORTS for
+# what 'reserved' and 'undeclared' do.
+#
+# Two keys on one line need a comma between them; one key per line, as
+# below, needs nothing.
+
+# What happens to a port this file does not mention.  'protect' is the
+# default and means only declared ports may be powered down; 'switch'
+# means any of the 16 may be.
+undeclared = protect
+
+# Ports that must never be powered down, whichever mode is in force.
+# Anything the hub feeds but nobody talks to belongs here: a
+# single-board computer, a powered peripheral.  Nothing notices if
+# their VBUS disappears, they simply reboot, uncleanly, mid-write.
+reserved = [ 13, 14, 15, 16 ]
+
+# Every other key is a device.  'port' is required: the hub's own port
+# number, 1 to 16.
+#
+# 'serial' is the debug probe's serial number, not the board's.  It is
+# what addresses a board for 'reset' and for flashing in parallel
+# (--method serial), so a board without one can only be reached by
+# cutting every other port (--method power).  Read it off a powered
+# board with `tribe-control serial <name>` and paste it whole: 48 hex
+# characters for CMSIS-DAP, 12 for J-Link.
+alpha {
+  serial    = '1026360216055e5b00000000000000000000000097969902'
+  interface = cmsis-dap
+  baud      = 230400
+  port      = 1
+}
+
+# interface defaults to cmsis-dap and baud to 230400.  Spelling them
+# out on every board, as above, is worth the noise once a setup carries
+# more than one kind: a default that fits most of them and not the rest
+# is the sort of thing nobody checks until a flash goes to the wrong
+# probe or a console comes back as noise.
+beta {
+  serial      = '000760040233'
+  interface   = jlink
+  baud        = 115200
+  # Cut and restore the port after a successful flash.  For a module
+  # whose radio does not come back from a plain SWD reset.
+  power_cycle = after-flash
+  port        = 7
+}
+
+# A board with no serial is still switchable and still has a console;
+# it just cannot be reset, or flashed in parallel.
+gamma {
+  port = 2
+}
+
+# 'port = none' keeps a record without a board: the entry is never
+# selected, switched or flashed, and naming it says so.  Write it when
+# a board stops enumerating and its port is given away, so that its
+# serial is not lost.
+retired {
+  serial = '1026360202c4dc0f00000000000000000000000097969902'
+  port   = none
+}

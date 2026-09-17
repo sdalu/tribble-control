@@ -35,7 +35,7 @@
 #                     reported ok=0, tx-rate=NaN, which reads exactly like
 #                     a board that is up and silent
 #
-# Usage: sh scripts/test-tribe-control [host] [tribe-control-path]
+# Usage: sh test-tribe-control [host] [tribe-control-path]
 #
 # The second argument exists so the suite can be pointed at a deliberately
 # broken copy: a test that has never been seen to fail is not evidence.
@@ -141,7 +141,7 @@ say "a port with no board is reported, not captured silently" \
 
 # The power-cycle gate, which is the one test here that writes flash.
 #
-# Opt-in, because it does: TRIBE_TEST_FLASH=1 sh scripts/test-tribe-control
+# Opt-in, because it does: TRIBE_TEST_FLASH=1 sh test-tribe-control
 #
 # It cannot be done any other way.  The warning it checks for fires only
 # after a SUCCESSFUL flash, so there has to be one.  What keeps it safe is

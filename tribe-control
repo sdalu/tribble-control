@@ -1441,14 +1441,16 @@ is the only thing that tells tribe-control which ports it may touch.
     undeclared = protect            # the default; see PROTECTED PORTS
     reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
 
-    alpha   { serial = '1026360216055e5b0000...97969902'  port = 1    }
+    alpha   { serial = '1026360216055e5b0000...97969902', port = 1    }
     beta    {                                             port = 2    }
-    gamma   { serial = '1026360213072dde0000...97969902'  port = 4    }
-    retired { serial = '1026360202c4dc0f0000...97969902'  port = none }
+    gamma   { serial = '1026360213072dde0000...97969902', port = 4    }
+    retired { serial = '1026360202c4dc0f0000...97969902', port = none }
 
-Indentation is not significant; a CMSIS-DAP serial is 48 hex characters
-and a J-Link one 12, and both are pasted whole -- the ones above are
-elided in the middle for width.
+Indentation is not significant, but separators are: two keys on one line
+need a comma between them, which is why the entries above carry one and
+one-key-per-line entries do not.  A CMSIS-DAP serial is 48 hex
+characters and a J-Link one 12, and both are pasted whole -- the ones
+above are elided in the middle for width.
 
 Every device entry must carry a port, and 'port = none' is how one says it
 is a record rather than a board on the bench.  'retired' above is the
@@ -1473,7 +1475,7 @@ RECIPES) and pasting the value in.
 Two optional keys describe a board whose probe or console differs from
 the default:
 
-    epsilon { serial = '000760040233'  interface = jlink  baud = 115200
+    epsilon { serial = '000760040233', interface = jlink, baud = 115200,
               port = 7 }
 
     interface   the openocd interface script, without the .cfg: cmsis-dap
