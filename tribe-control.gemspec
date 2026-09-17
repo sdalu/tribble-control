@@ -35,13 +35,14 @@ Gem::Specification.new do |spec|
     spec.bindir      = 'exe'
     spec.executables = [ 'tribe-control' ]
 
-    # 0.6 or better: that is where ManagedUSB started holding an
-    # exclusive lock on the serial line across a whole read-modify-write,
-    # and where it began refusing a port outside 1..16 instead of
-    # shifting a bit off the end of the state word.  Pinned to the
-    # series for the reason given under ucl below -- the failure mode
-    # of a quiet change here is a port switched that should not be.
-    spec.add_dependency 'exsys', '~> 0.6.0' # the hub, over its FT232 line
+    # 1.0 or better.  0.6 gave ManagedUSB an exclusive lock on the
+    # serial line across a whole read-modify-write; 1.0 makes that
+    # session public, so the lock this program used to keep for itself
+    # is the library's job now, and refuses an empty port list instead
+    # of reading it as every port.  Pinned to the series for the reason
+    # given under ucl below -- the failure mode of a quiet change here
+    # is a port switched that should not be.
+    spec.add_dependency 'exsys', '~> 1.0'   # the hub, over its FT232 line
     spec.add_dependency 'parallel'    # one openocd per board at a time
     spec.add_dependency 'tty-logger'
     spec.add_dependency 'uart'        # board consoles, in `connect`

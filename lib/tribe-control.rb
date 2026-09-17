@@ -15,7 +15,6 @@
 #
 require_relative 'tribe-control/version'
 require_relative 'tribe-control/platform'
-require_relative 'tribe-control/serialised-hub'
 require_relative 'tribe-control/cli'
 require_relative 'tribe-control/tally'
 

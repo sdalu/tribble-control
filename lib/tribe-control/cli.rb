@@ -14,7 +14,6 @@ require 'parallel'
 
 require_relative 'version'
 require_relative 'platform'
-require_relative 'serialised-hub'
 
 module TribeControl
 
@@ -749,8 +748,16 @@ class CLI
 
         
         # Instanciate USB hub control
-        @exsys = SerialisedHub.new(
-            ExSYS::ManagedUSB.new(opts[:device], opts[:password]))
+        #
+        # No wrapper of ours: exsys holds an exclusive lock on the
+        # serial line for the whole of each call, the read-modify-write
+        # of an on/off included, and that covers every process touching
+        # the hub rather than only the tribe-control ones a lock file of
+        # ours could know about.  SerialisedHub did this job from the
+        # outside until exsys 1.0; nothing here needs a lock spanning
+        # two calls, and the one candidate -- the turn-by-turn cycling
+        # of --method power -- must not hold the line across its sleeps.
+        @exsys = ExSYS::ManagedUSB.new(opts[:device], opts[:password])
 
         # Debug
         if opts.include?(:debug)

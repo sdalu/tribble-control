@@ -216,10 +216,13 @@ the firmware.
 It carries no port states; cusba64 fills its On= and Off= display from
 a separate GP.
 .Pp
-The exsys gem implements all of these except ?Q, and as of 0.6 holds
-an exclusive lock on the line for the whole of a read\-modify\-write,
-so two processes cannot lose each other's changes between the GP and
-the SP.
+The exsys gem implements all eight as of 1.0, ?Q as #query, and the
+port count it answers decides what "every port" covers rather than
+being assumed.
+It holds an exclusive lock on the line for the whole of a
+read\-modify\-write, so two processes cannot lose each other's changes
+between the GP and the SP, and it refuses an empty port list rather
+than reading it as every port.
 The default password is
 \&'pass', right\-padded to 8 characters.
 .Pp
@@ -246,7 +249,8 @@ RH resets the hub and RD
 restores factory defaults; either drops every port, which power\-cycles
 everything on the hub, reserved ports included.
 tribe\-control never
-issues them, and the exsys gem only does so via #reset and #restore.
+issues them, and the exsys gem only does so via #reset and
+#factory_reset, both of which require an explicit confirm: true.
 .Sh DEVLIST
 A UCL file mapping a device name to a hub port, and optionally to the
 board's CMSIS\-DAP serial number.
@@ -882,7 +886,7 @@ The hub password defaults to 'pass' (\-p/\-\-password to change it).
 It
 guards writes to the hub, not reads.
 .Sh FILES
-.Bl -tag -width /tmp/tribe-control.hub.lock
+.Bl -tag -width /usr/bin/openocd
 .It Pa devlist.conf
 The device list, named with
 .Fl D .
@@ -893,14 +897,6 @@ See
 .It Pa /usr/bin/openocd
 The openocd binary, overridable with
 .Fl -openocd .
-.It Pa /tmp/tribe-control.hub.lock
-Held for the duration of each exchange with the hub.
-The 16 ports are switched over a single FT232, so two
-.Nm
-processes touching it at once both fail; they queue here instead.
-The exsys gem locks the serial line itself as of 0.6, which covers
-every user of the hub rather than only this one; this file is what
-still serialises on a host that will not lock a character device.
 .El
 .Sh SEE ALSO
 .Xr openocd 1

@@ -2,16 +2,16 @@ PATH
   remote: .
   specs:
     tribe-control (0.1.0)
-      exsys
+      exsys (~> 1.0)
       parallel
       tty-logger
       uart
-      ucl
+      ucl (~> 0.2.0)
 
 GEM
   remote: https://rubygems.org/
   specs:
-    exsys (0.6)
+    exsys (1.0)
       uart
     parallel (1.27.0)
     pastel (0.8.0)

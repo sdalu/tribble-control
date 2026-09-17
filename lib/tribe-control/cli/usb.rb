@@ -48,7 +48,7 @@ class USB < CLI::Command
             ports = port_list(argv)
             if ports.empty?
             then tty&.info "Turning on all ports"
-                 exsys.on
+                 exsys.on(ExSYS::ManagedUSB::ALL)
             else tty&.info "Turning on ports: #{ports.join(' ')}"
                  exsys.on(*ports)
             end
