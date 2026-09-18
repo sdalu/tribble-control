@@ -1,0 +1,140 @@
+#!/bin/sh
+# vbus-check — find out what a hub's 'off' does to a socket: cut one
+# port for a few seconds while you watch the LED of the board on it,
+# restore it, and print the 'switch =' line the answer implies.
+#
+# usage: vbus-check [-n] [-t seconds] [tribble-control options...] PORT|NAME
+#
+# Everything between the script's own flags and the last argument is
+# handed to tribble-control unchanged, so name the hub the way you
+# would for any command: -D devlist.conf, or --hub usb -d SERIAL -F.
+# Without a devlist tribble-control refuses to power anything down,
+# which is what -F is for here.
+#
+#   -n           dry run: print what would be switched, switch nothing
+#   -t seconds   how long the port stays off (default 5)
+#
+# Environment: TRIBBLE_CONTROL names the binary (default: tribble-control
+# on PATH).  Exit 0 with an answer, 1 when tribble-control refused or
+# the port could not be switched, 2 on a usage error.
+#
+# Why a script: software cannot tell whether a hub's power switch is
+# wired to VBUS.  A hub with none still reports the port unpowered and
+# drops the link, so the board vanishes and returns either way.  Only
+# an LED knows -- see 'switch' in tribble-control(1).
+set -eu
+
+: "${TRIBBLE_CONTROL:=tribble-control}"
+readonly countdown=3
+
+progname=${0##*/}
+
+die()  { printf '%s: %s\n' "$progname" "$*" >&2; exit 1; }
+warn() { printf '%s: %s\n' "$progname" "$*" >&2; }
+
+usage() {
+    printf 'usage: %s [-n] [-t seconds] [tribble-control options...] PORT|NAME\n' \
+           "$progname" >&2
+    exit 2
+}
+
+# The script's own flags come first and are few; everything after them
+# belongs to tribble-control, so getopts cannot be let loose on the
+# whole line.
+dry_run=0 hold=5
+while [ $# -gt 0 ]; do
+    case $1 in
+    -n) dry_run=1; shift ;;
+    -t) [ $# -ge 2 ] || usage
+        hold=$2; shift 2 ;;
+    -t*) hold=${1#-t}; shift ;;
+    --) shift; break ;;
+    *)  break ;;
+    esac
+done
+case $hold in
+    ''|*[!0-9]*) warn "-t takes a number of seconds, not '$hold'"; usage ;;
+esac
+[ $# -ge 1 ] || usage
+
+# The last argument is the port; the rest are tribble-control's.  POSIX
+# sh has no arrays, so the list is rebuilt: the first n-1 arguments are
+# appended after the originals, then the originals are shifted off.
+port=
+for arg in "$@"; do port=$arg; done
+n=$(( $# - 1 ))
+i=0
+for arg in "$@"; do
+    i=$(( i + 1 ))
+    [ "$i" -le "$n" ] && set -- "$@" "$arg"
+done
+shift $(( n + 1 ))
+
+command -v "$TRIBBLE_CONTROL" >/dev/null 2>&1 \
+    || die "no $TRIBBLE_CONTROL on PATH; set TRIBBLE_CONTROL to the binary"
+
+tc() { "$TRIBBLE_CONTROL" "$@"; }
+
+# Status listings are commentary: the product of this script is the one
+# 'switch =' line at the end, and that is all that goes to stdout.
+status() {
+    printf -- '--- %s\n' "$1" >&2
+    shift
+    tc "$@" usb status >&2 || die 'usb status failed; is the hub named?'
+}
+
+# Restore the port on every exit once it has been cut, Ctrl-C during
+# the hold included: a check that leaves the board off has done the
+# one thing it exists to warn about.
+cut=0
+restore() {
+    if [ "$cut" -eq 1 ]; then
+        cut=0
+        warn "making sure port $port is on"
+        tc "$@" usb on "$port" >&2 || warn "could not restore port $port"
+    fi
+}
+# shellcheck disable=SC2064  # "$@" must be captured now: the trap runs after the list is gone
+trap "restore $(printf "'%s' " "$@")" EXIT
+trap 'exit 130' INT TERM
+
+printf 'Watch the LED of the board on port %s.\n' "$port" >&2
+printf 'In %s seconds the port is cut for %s seconds, then restored.\n' \
+       "$countdown" "$hold" >&2
+
+status 'before' "$@"
+
+if [ "$dry_run" -eq 1 ]; then
+    printf 'dry run: would run %s %s usb off %s, wait %ss, then usb on %s\n' \
+           "$TRIBBLE_CONTROL" "$*" "$port" "$hold" "$port" >&2
+    exit 0
+fi
+
+sleep "$countdown"
+cut=1
+tc "$@" usb off "$port" >&2 || die "tribble-control refused to cut port $port"
+status 'while cut' "$@"
+sleep "$hold"
+restore "$@"
+status 'after' "$@"
+
+# The question, asked on the terminal even when stdin is a pipe.  With
+# no terminal at all there is nobody to ask, so both readings are
+# printed and the caller decides.
+if [ ! -r /dev/tty ]; then
+    warn 'no terminal to ask on; the LED decides:'
+    printf '%s\n' 'switch = vbus   # if the LED went out' \
+                  'switch = link   # if it stayed lit'
+    exit 0
+fi
+while :; do
+    printf 'Did the LED go out while the port was off? [y/n] ' >&2
+    IFS= read -r answer < /dev/tty || die 'no answer'
+    case $answer in
+    [Yy]*) printf 'Write this at the top of the devlist:\n' >&2
+           printf '%s\n' 'switch = vbus'; break ;;
+    [Nn]*) printf 'Write this at the top of the devlist, or leave it out (it is the default):\n' >&2
+           printf '%s\n' 'switch = link'; break ;;
+    *)     warn 'y or n' ;;
+    esac
+done

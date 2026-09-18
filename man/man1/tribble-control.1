@@ -1185,6 +1185,16 @@ Do it on the socket the bench will actually use: the USB 2 and USB 3
 sides of one physical socket are different ports on different hubs, and
 a hub may switch neither.
 .Pp
+The script shipped as examples/vbus\-check runs that recipe: it takes
+the options you would give
+.Nm
+and the port, cuts the port for five seconds, restores it even on
+Ctrl\-C, and prints the 'switch =' line your answer implies.
+.Bd -literal
+examples/vbus\-check \-\-hub usb \-D dock.conf gamma
+examples/vbus\-check \-n \-\-hub usb \-d AC0528515619 \-F 2   # dry run
+.Ed
+.Pp
 List the switchable hubs this host has, to fill in 'device':
 .Bd -literal
 tribble\-control \-\-hub usb usb status

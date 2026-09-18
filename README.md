@@ -287,6 +287,10 @@ goes out means `vbus`, an LED that stays lit while the board disappears
 from the host means `link`.  Test the socket you will actually use — the
 USB 2 and USB 3 sides of one socket are different ports on different
 hubs, and a hub may switch neither.
+`examples/vbus-check` runs the recipe: give it the options you would
+give `tribble-control` and the port, it cuts the port for five seconds,
+restores it even on Ctrl-C, and prints the `switch =` line your answer
+implies.
 
 Under `switch = link` everything that powers down still works.  `usb
 off`, `toggle` and `set` behave, the board vanishes from the host

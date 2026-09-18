@@ -58,6 +58,7 @@ lib/tribble-control/
     cli/*.rb               one file per command (usb, flash, ...)
 man/man1/tribble-control.1   the manual (mdoc), rendered by --man
 examples/devlist.conf      a device list to copy and edit
+examples/vbus-check        the LED recipe as a script: cut, hold, restore, ask
 test/test_*.rb             minitest: everything that needs no hub
 test/support/fake_hub.rb   a pty speaking the ExSYS hub's real frames
 test/support/fake_usbconfig.rb  a host answering sysctl and usbconfig
