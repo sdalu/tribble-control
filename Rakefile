@@ -22,6 +22,25 @@ require 'rake/clean'
 #                  README, and rebuilding it costs a network.
 CLOBBER.include('pkg', '*.gem')
 
+# `rake release` is bundler's: build the gem, tag the version, push the
+# commits and the tag, then push the gem to the host the gemspec
+# allows.  That host is 'none' here -- this gem drives a bench and is
+# installed from a checkout, so a push would be an accident -- but
+# bundler still runs the step, and RubyGems, handed a host that is not
+# a URL, dies in its proxy lookup rather than refusing.  So the last
+# step is replaced: the release stops after the tag is pushed, and says
+# why.  Everything before it is bundler's own and unchanged.
+Rake::Task['release:rubygem_push'].clear
+Rake::Task['release'].clear_comments
+desc 'Build the gem, tag the version, push commits and tag; push no gem'
+task :release
+namespace :release do
+    task :rubygem_push do
+        puts 'Not pushing the gem anywhere: it is installed from a' \
+             ' checkout, and the gemspec allows no push host'
+    end
+end
+
 # Two suites, and `rake test` is the one that runs anywhere.
 #
 # The minitest half needs no hub: the devlist layer, types, tallies and

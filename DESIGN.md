@@ -787,7 +787,10 @@ linter at zero is a gate; at several hundred it is a wall nobody reads.
     anywhere.  See `rake man:install`.
   * `allowed_push_host` is `none`.  This gem drives a bench; it is
     installed from a checkout, not fetched, and `gem push` on it would
-    be an accident.
+    be an accident.  `rake release` therefore ends after the tag is
+    pushed: bundler's last step, the gem push, is replaced in the
+    Rakefile by a line saying so, because RubyGems handed a host that
+    is not a URL dies rather than refuses.
   * `Gemfile.lock` is not committed.  This is a library, and the bench
     installs the built gem rather than a vendored bundle, so nothing
     reads a lock.
