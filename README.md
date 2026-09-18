@@ -73,8 +73,8 @@ Install it on the hub host as a gem, which brings the Ruby
 dependencies with it and needs nothing else:
 
 ```sh
-rake install                            # from a checkout
-gem install tribble-control-0.1.0.gem     # from `rake build`
+rake install                             # from a checkout
+gem install pkg/tribble-control-*.gem    # from `rake build`
 ```
 
 Or, on a host that should not gain gems system-wide, deploy the
