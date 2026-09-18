@@ -50,14 +50,29 @@ Gem::Specification.new do |spec|
     spec.bindir      = 'exe'
     spec.executables = [ 'tribble-control' ]
 
-    # 1.0 or better.  0.6 gave ManagedUSB an exclusive lock on the
+    # 1.2 or better.  0.6 gave ManagedUSB an exclusive lock on the
     # serial line across a whole read-modify-write; 1.0 makes that
     # session public, so the lock this program used to keep for itself
     # is the library's job now, and refuses an empty port list instead
-    # of reading it as every port.  Pinned to the series for the reason
-    # given under ucl below -- the failure mode of a quiet change here
-    # is a port switched that should not be.
-    spec.add_dependency 'exsys', '~> 1.1'   # the hub, over its FT232 line,
+    # of reading it as every port.  1.1 added `available`, which is how
+    # the hub is found and named here, and the USB path it reports is
+    # what --method usb builds a board's path from.
+    #
+    # The floor is 1.2 for the FreeBSD discovery fix, of which this
+    # tool is precisely the caller that gets hurt: before it, an
+    # adapter whose tty was not named yet came back as :device
+    # '/dev/tty' -- '/dev/tty' + '' -- and #hub_device takes a lone
+    # candidate without asking, so `usb off` on such a host would have
+    # written SP frames at the operator's own terminal.  1.2 also
+    # bounds the walk up the sysctl tree, which unbounded is a command
+    # that never returns and never says why, and it stops reporting a
+    # silent line as an Error carrying no message -- which is the whole
+    # of what CLI.run would print, at the moment the line went quiet.
+    #
+    # Pinned to the series for the reason given under ucl below -- the
+    # failure mode of a quiet change here is a port switched that
+    # should not be.
+    spec.add_dependency 'exsys', '~> 1.2'   # the hub, over its FT232 line,
                                             #   and finding it on the host
     spec.add_dependency 'parallel'    # one openocd per board at a time
     spec.add_dependency 'tty-logger'
