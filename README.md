@@ -58,17 +58,13 @@ openocd to reach a board.
     elsewhere pass `--openocd=/usr/local/bin/openocd`, or
     `--openocd=openocd` to have `PATH` answer.  `flash` and `reset`
     check for it before they switch a single port.
-  * **Linux or FreeBSD.**  Two commands reach a board's console or its
-    probe descriptor by walking `/sys/bus/usb`, which FreeBSD has no
-    equivalent of; on FreeBSD they need their other selection method.
-
-| Command   | Linux | FreeBSD                |
-| :-------- | :---- | :--------------------- |
-| `usb`     | yes   | yes                    |
-| `flash`   | yes   | yes                    |
-| `reset`   | yes   | yes                    |
-| `serial`  | yes   | with `--method power`  |
-| `connect` | yes   | with `--method serial` |
+  * **Linux or FreeBSD.**  Every command works on both, by every
+    selection method.  The two hosts answer "where is this board
+    plugged in" differently — Linux states it in `/sys/bus/usb`, and
+    FreeBSD is asked to walk its sysctl tree instead — and the one
+    thing FreeBSD cannot do is see a device that no driver claimed,
+    there being no node for it at all.  A probe that enumerates and
+    attaches nothing is invisible there rather than serial-less.
 
 
 ## Installing it
@@ -102,7 +98,17 @@ the setup; `examples/devlist.conf` is a commented file to start from.
 Deploy the two together — they are read together, and a hub with one of
 them fresh and the other stale switches the wrong ports.
 
+If the two must move separately, move the **tool first**.  Every
+top-level key this tool does not know is taken for a board, and a board
+must declare a port, so a devlist carrying a newer key meets an older
+tool as `devlist entry 'device' has no port`.  That is a refusal before
+anything is switched rather than a bench in the wrong state — but the
+command does not run, so upgrade in that order.
+
 ```text
+# Which hub these ports are on: its FT232's serial number.
+device = AL03GD7X
+
 # Ports that must never be powered down.
 reserved = [ 13, 14, 15, 16 ]
 
@@ -139,6 +145,65 @@ retired {
 A device's own keys win over the type's.  Read a probe serial off a
 powered board with `tribble-control serial <name>` and paste it whole:
 48 hex characters for CMSIS-DAP, 12 for J-Link.
+
+
+## Which hub
+
+A host with one hub needs to be told nothing: the tool looks for the
+FTDI 0403:6001 that is a hub's control adapter and drives the one it
+finds.
+
+A host with two is two benches, and it refuses to guess — that FTDI id
+is every FT232 on the machine, so the first one enumerated is a coin
+toss, and a command that reaches the wrong hub is not an error
+anywhere: the ports exist, the frames are accepted, and the boards that
+go dark are on the other bench.  It lists what it found instead, with
+serials:
+
+```text
+tribble-control: unable to auto-detect the hub control line: 2 FTDI
+0403:6001 adapters on this host (found: A50285BI on /dev/ttyUSB0,
+AL03GD7X on /dev/ttyUSB1).  Name the one to drive with -d, or with a
+'device =' line in the devlist.
+```
+
+`exsys-usb discover`, from the exsys gem, lists them the same way
+without switching anything:
+
+```text
+/dev/ttyUSB0 A50285BI 1-1.2.4.4
+/dev/ttyUSB1 AL03GD7X 1-1.3.4.4
+```
+
+Put that serial in the devlist, as `device =` at the top, and `-D`
+alone selects a bench — which is already the thing every command has
+to say.  `-d` overrides it for the one-off.
+
+Either takes three shapes, told apart by what they look like:
+
+| Written        | Means                        | Stays with   |
+| :------------- | :--------------------------- | :----------- |
+| `AL03GD7X`     | the FT232's serial number    | the adapter  |
+| `1-1.2.4.4`    | a USB path on this host      | the socket   |
+| `/dev/ttyUSB1` | the serial line itself       | nothing      |
+
+The last is the one not to write down.  The `1` in `/dev/ttyUSB1` is
+not the hub's number, and not the USB device number either — it is the
+usbserial layer's index, and it is the lowest one free when that
+adapter is probed.  So it depends on what else attached first, and it
+is reused: unplug whatever holds `ttyUSB0` and the next thing to attach
+takes `ttyUSB0`.  Two hubs can swap names across a reboot, or while the
+machine is up.
+
+Between the other two: a serial names *this particular hub* and follows
+it to another socket or another machine, which is usually what a bench
+wants.  A USB path names *whatever is plugged into that socket*, a
+replacement hub included.  Reach for the path when the hub's EEPROM
+carries no serial — then it is the only stable name it has — or when
+the socket is the fixed thing.  Both platforms report one, by different
+means: Linux states it in `/sys`, and on FreeBSD it is walked out of
+the sysctl tree.  The numbering is each host's own, so a path names a
+socket on the machine that reported it and does not travel.
 
 
 ## Protected ports
@@ -182,7 +247,7 @@ default:
 | Method   | Addresses a board by       | Needs              |
 | :------- | :------------------------- | :----------------- |
 | `serial` | its debug probe's serial   | `serial =` on each |
-| `usb`    | its USB path under the hub | Linux              |
+| `usb`    | its USB path under the hub | a visible topology |
 | `power`  | being the only one powered | nothing            |
 
 | Command   | Methods accepted        | Default  |

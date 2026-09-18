@@ -48,6 +48,14 @@ class CLI
         end
     end
 
+    # The USB id of a hub's control adapter, for the messages that name
+    # it.  Asked of the gem rather than written out six times: it is a
+    # fact about the hardware, the gem is what knows it, and a literal
+    # here would go on saying 0403:6001 after the gem had stopped
+    # looking for that.
+    CTRL_ID = "#{ExSYS::ManagedUSB::CTRL_VENDOR}:" \
+              "#{ExSYS::ManagedUSB::CTRL_PRODUCT}".freeze
+
     # devlist key listing ports that must never be powered down
     RESERVED_KEY   = 'reserved'
 
@@ -76,6 +84,25 @@ class CLI
     # physical probe.  A type that set either would be saying that
     # every board of that kind is the same board.
     TYPE_FORBIDDEN = [ 'port', 'serial' ].freeze
+
+    # Top-of-file devlist key: the serial line of the hub this file
+    # describes.
+    #
+    # A devlist is one bench, and a bench is one hub, so the file that
+    # says which board is on which port is the right place to say which
+    # hub those ports belong to.  Without it, a host with two hubs
+    # plugged in has to be told twice -- -d for the line, -D for the
+    # map -- and the two are then free to disagree: -D says bench two
+    # and -d, or the auto-detection, says the first FTDI adapter the
+    # host happens to enumerate.  With it, -D alone selects a bench.
+    #
+    # -d still wins, for the one-off: a hub that has moved, or a line
+    # reached through something other than the usual node.
+    #
+    # The value is an FT232 serial, a USB path (1-1.2.4.4), or a device
+    # node when it has a '/' in it.  See #hub_device for which to write
+    # in a file that gets deployed, and why the node is the wrong one.
+    DEVICE_KEY     = 'device'
 
     # Which tally reads the consoles.  Recognised at the top of the
     # file, where it sets the bench's default, and inside a device,
@@ -116,7 +143,9 @@ class CLI
         opts.separator ''
         opts.separator 'Global options:'
 
-        opts.on '-d', '--device=DEV',      'Serial line to USB hub'
+        opts.on '-d', '--device=DEV',   'Which USB hub: its FT232 serial',
+                                        '  number, or the path of its',
+                                        '  serial line if it has a / in it'
         opts.on '-p', '--password=STRING', 'USB hub password'
         opts.on '-D', '--devlist=FILE',    'Device list file'
         opts.on '-m', '--method=TYPE', [ 'power', 'usb', 'serial' ],
@@ -248,9 +277,19 @@ class CLI
     #
     # Commands that report per-device success (flash, reset, serial)
     # return false if any device failed; that becomes exit status 1.
+    # ExSYS::ManagedUSB::Error is in the list because the hub layer is
+    # ours to report on, not to leak: the gem raises it both for a hub
+    # that refuses a command (E01 on a wrong password) and for a host
+    # it cannot look for a hub on (no udevadm, an unsupported
+    # platform).  Both are operator errors with nothing to debug, and
+    # both used to reach exe/tribble-control's catch-all instead --
+    # which prints the same line, so nothing was visibly wrong, but it
+    # is the net under the trapeze and not the trapeze.  A library
+    # caller of CLI.run got the backtrace.
     def self.run(argv = ARGV)
         self.new.parse(argv).run.tap {|ok| exit 1 if ok == false }
-    rescue OptionParser::InvalidArgument, CLI::Error => e
+    rescue OptionParser::InvalidArgument, CLI::Error,
+           ExSYS::ManagedUSB::Error => e
         warn "#{PROGNAME}: #{e}"
         exit 1
     end
@@ -260,8 +299,14 @@ class CLI
     attr_reader :tty
     attr_reader :conf
 
+    # The hub's control line, once parse has settled which it is: what
+    # -d named, or what the devlist's 'device' line named, or the one
+    # the host was found to have.
+    attr_reader :device
+
     # Initializer
     def initialize
+        @device        = nil
         @devlist       = nil
         @reserved      = []
         @undeclared    = :protect
@@ -592,7 +637,14 @@ class CLI
           sleep(@opts[:'warm-up'])
 
           name_port_list.map do |name, port|
-            usb = Platform.port_to_usb(port, root: @opts[:device])
+            unless (root = self.hub_usb_root)
+                raise Error, 'cannot place the hub in the USB tree, so' \
+                             " --method usb cannot address a board:" \
+                             " #{@opts[:device]} is not an adapter this" \
+                             ' host reports a USB path for.  Use' \
+                             ' --method serial, or --method power'
+            end
+            usb = Platform.port_to_usb(port, root: root)
             # The serial goes too, when the devlist has one.
             #
             # 'adapter usb location' does not select anything: measured
@@ -702,6 +754,172 @@ class CLI
       ok
     end
 
+    # The hub's control line, from what -d or the devlist named, or
+    # from the host when neither named anything.
+    #
+    # Three shapes of name, told apart by what they look like, no two
+    # of which can be confused:
+    #
+    #   /dev/ttyUSB1   a '/' in it, so a device node, used as given --
+    #                  the same rule --openocd uses to tell a path from
+    #                  a name to look up
+    #   1-1.2.4.4      the USB path shape (ExSYS::ManagedUSB::USB_PATH),
+    #                  so the adapter in that socket
+    #   AL03GD7X       anything else, so an FT232 serial number
+    #
+    # The node is the worst of the three to write down.  The number in
+    # /dev/ttyUSB1 is not the hub's, and not the USB device number
+    # either: it is the usbserial layer's own index, and it is the
+    # LOWEST ONE FREE when the adapter is probed (ttyU on FreeBSD,
+    # allocated the same way).  So it depends on what else was attached
+    # first, and it is reused -- unplug the adapter holding ttyUSB0 and
+    # the next thing to attach becomes ttyUSB0.  Two hubs can therefore
+    # swap names across a reboot, or while the machine is up, and every
+    # devlist naming them that way is then pointed at the other bench.
+    #
+    # The other two are both stable, and they answer different
+    # questions.  A serial stays with the ADAPTER: move the hub to
+    # another socket or another machine and its serial goes with it.  A
+    # USB path stays with the SOCKET: whatever is plugged in there
+    # answers to it, a replacement hub included.  Naming one particular
+    # hub is the serial's job and is the usual want.  The path is for
+    # the hub whose EEPROM carries no serial to be named by -- its only
+    # stable name -- and for a bench where the socket is the fixed
+    # thing.  Both platforms report one, but each in its own numbering,
+    # so a path names a socket on the host that reported it and does
+    # not travel to another.
+    #
+    # Auto-detection is a guess, and it is only a safe guess while
+    # there is one candidate.  ExSYS::ManagedUSB.available reports every
+    # FTDI 0403:6001 on the host, which is a hub's control adapter and
+    # also every other FT232 attached -- the gem says so itself, and
+    # deliberately reports rather than decides, because telling them
+    # apart means opening the line and writing to it.  Two of them used
+    # to make this a coin toss decided by enumeration order, settled
+    # silently, on a command that then switched somebody else's ports.
+    # It refuses instead, and lists what it found with the serials to
+    # choose between them.
+    def hub_device(named)
+        if named&.include?(File::SEPARATOR)
+            # A line named outright is used as given, and discovery is
+            # not required to succeed for that to work -- naming it is
+            # the escape hatch for a host discovery cannot answer on.
+            # It is still ASKED, quietly, because a line that IS a
+            # known candidate brings its USB path with it, and that is
+            # what --method usb needs; see #hub_usb_root.
+            @hub = self.candidate_for(named)
+            return named
+        end
+
+        found = ExSYS::ManagedUSB.available
+        seen  = if found.empty?
+                    'none found'
+                else
+                    'found: ' + found.map {|c| self.class.describe_ctrl(c) }
+                                     .join(', ')
+                end
+
+        if named
+            key, what = if ExSYS::ManagedUSB::USB_PATH.match?(named)
+                        then [ :usb_path, 'at USB path' ]
+                        else [ :serial,   'with serial'  ]
+                        end
+            match = found.select {|c| c[key] == named }
+            case match.size
+            when 1 then return (@hub = match.first)[:device]
+            when 0
+                # A path that matched nothing on a host reporting no
+                # paths at all is a different mistake from a path that
+                # is simply not this one, and saying "not found" would
+                # send the reader hunting for a socket.
+                if key == :usb_path && found.none? {|c| c[:usb_path] }
+                    raise Error, "no FTDI #{CTRL_ID} at USB path" \
+                                 " '#{named}': this host reports no USB" \
+                                 ' path for any of its serial lines, so' \
+                                 ' none can be named that way.  Name the' \
+                                 ' hub by the serial of its FT232 instead' \
+                                 " (#{seen})"
+                end
+                raise Error, "no FTDI #{CTRL_ID} #{what} '#{named}' on this" \
+                             " host (#{seen}).  A name with a '/' in it is" \
+                             ' taken as the path of a serial line, one' \
+                             ' shaped 1-1.2.4.4 as a USB path, and anything' \
+                             ' else as an FT232 serial number'
+            else
+                raise Error, "#{match.size} FTDI #{CTRL_ID} are #{what}" \
+                             " '#{named}' (#{seen}): name the line by path" \
+                             ' instead'
+            end
+        end
+
+        case found.size
+        when 1 then (@hub = found.first)[:device]
+        when 0
+            raise Error, 'unable to auto-detect the hub control line:' \
+                         " no FTDI #{CTRL_ID} on this host.  Name it with" \
+                         " -d, or with a '#{DEVICE_KEY} =' line in the" \
+                         ' devlist'
+        else
+            raise Error, 'unable to auto-detect the hub control line:' \
+                         " #{found.size} FTDI #{CTRL_ID} adapters on this" \
+                         " host (#{seen}).  Name the one to drive with" \
+                         " -d, or with a '#{DEVICE_KEY} =' line in the" \
+                         ' devlist'
+        end
+    end
+
+    # The candidate the host reports for a line named outright, or nil.
+    #
+    # Quietly: naming a line is the escape hatch for a host discovery
+    # cannot answer on -- a pty under test, a node discovery does not
+    # know -- so a discovery that fails here must not take the run with
+    # it.  What is lost when it does is the USB path, and with it
+    # --method usb, which says so at the point it needs one.
+    def candidate_for(line)
+        ExSYS::ManagedUSB.available.find {|c| c[:device] == line }
+    rescue ExSYS::ManagedUSB::Error
+        nil
+    end
+
+    # The hub's own place in the USB tree: the node its sixteen sockets
+    # hang off, which is what Platform.port_to_usb builds a board's
+    # path from.
+    #
+    # Worked out from the control adapter the gem reported, not from
+    # the serial line: the FT232 is wired at the last position of the
+    # hub's internal 4-by-4 tree, so its own path is <root>.4.4 and the
+    # root is that path less those two.
+    #
+    # nil when there is nothing to work it out from -- a line named
+    # outright that discovery does not know, or a host that reports no
+    # USB path for it.  --method usb cannot work then, and says so
+    # rather than guessing; --method serial and --method power need no
+    # topology at all.
+    def hub_usb_root
+        return @hub_usb_root if defined?(@hub_usb_root)
+
+        parts = @hub&.dig(:usb_path)&.split('.')
+        @hub_usb_root = if parts.nil? || parts.size < 3
+                        then nil
+                        else parts[0..-3].join('.')
+                        end
+    end
+
+    # One candidate, as an error message names it.
+    #
+    # The serial leads, that being what the reader is meant to copy
+    # into a devlist, and the USB path follows it in brackets where the
+    # host reports one -- for the adapter with no serial it is the only
+    # stable name there is, and a refusal is where somebody goes
+    # looking for it.
+    def self.describe_ctrl(ctrl)
+        name = if ctrl[:serial]
+               then "#{ctrl[:serial]} on #{ctrl[:device]}"
+               else "#{ctrl[:device]}, which reports no serial"
+               end
+        ctrl[:usb_path] ? "#{name} [#{ctrl[:usb_path]}]" : name
+    end
+
         # Argument parsing
     def parse(argv)
         # Parsed option holder
@@ -749,13 +967,6 @@ class CLI
         end
 
 
-        # ExSYS USB hub
-        if !opts.include?(:device)
-            unless (opts[:device] = Platform.exsys_ctrl.first)
-                raise Error, "Unable to auto-detect ExSYS hub device"
-            end
-        end
-
         # Config
         if opts.include?(:devlist)
             file = opts[:devlist]
@@ -773,6 +984,35 @@ class CLI
 
             if raw.include?(TALLY_KEY)
                 @tally_default = raw[TALLY_KEY].to_s
+            end
+
+            # Which hub this file describes.  A block or a list here is
+            # a file saying one devlist covers two benches, which it
+            # cannot: every port number in it belongs to one hub.
+            #
+            # Integer is accepted because UCL hands one back for an
+            # unquoted all-digit serial, which is a serial like any
+            # other and was refused as "must name one hub" -- a poor
+            # answer to a file that had named one.
+            #
+            # It is accepted and not fixed, because it CANNOT be fixed
+            # here: UCL has already parsed 00760040233 as the number
+            # 760040233 and the leading zeros are gone before this sees
+            # it.  Such a serial is looked up as written in the file
+            # minus its zeros, fails, and the refusal lists what the
+            # host really has -- which is the moment to quote it.  The
+            # docs say to quote a serial for this reason.
+            if raw.include?(DEVICE_KEY)
+                dev = raw[DEVICE_KEY]
+                unless [ String, Symbol, Integer ].any? {|k| dev.is_a?(k) }
+                    raise Error, "#{DEVICE_KEY} must name one hub: the" \
+                                 " serial of its FT232, such as A50285BI," \
+                                 " a USB path, such as 1-1.2.4.4, or the" \
+                                 ' path of its serial line, such as' \
+                                 ' /dev/ttyUSB0.  Quote a serial that is' \
+                                 ' all digits'
+                end
+                @device = dev.to_s
             end
 
             # The type definitions, lifted out before anything is
@@ -805,7 +1045,7 @@ class CLI
 
             @devlist  = raw.reject {|k,_|
                 [ RESERVED_KEY, UNDECLARED_KEY, TALLY_KEY,
-                  TYPES_KEY ].include?(k)
+                  TYPES_KEY, DEVICE_KEY ].include?(k)
             }
 
             # Every device says which port it is on, or says none. A
@@ -866,6 +1106,13 @@ class CLI
                              " than once: #{detail}"
             end
         end
+
+
+        # Which hub to drive.  Three answers, in the order they are
+        # trusted: -d on the command line, the devlist's own DEVICE_KEY
+        # line, and only then the host.
+        opts[:device] = self.hub_device(opts.fetch(:device, @device))
+        @device       = opts[:device]
 
 
         # Instanciate USB hub control

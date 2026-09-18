@@ -19,12 +19,16 @@ module DevlistHelper
     # its devlist interrogated without a hub existing.
     # +argv+ are global options; +command+ is the one parse insists on
     # having, and 'usb' is the one that reaches the hub for nothing.
+    # <tt>device: nil</tt> leaves -d off altogether, which is how the
+    # tests of the other two answers -- the devlist's own line, and the
+    # host -- get parse to look for one.
     def cli_for(devlist, *argv, command: 'usb', device: File::NULL)
         file = File.join(Dir.mktmpdir('tribble-test'), 'devlist.conf')
         File.write(file, devlist)
         @tmpdirs = (@tmpdirs || []) << File.dirname(file)
+        named    = device.nil? ? [] : [ '-d', device ]
         TribbleControl::CLI.new
-                         .parse([ '-d', device, '-D', file, *argv, command ])
+                         .parse([ *named, '-D', file, *argv, command ])
                          .tap {|cli| quieten(cli) }
     end
 

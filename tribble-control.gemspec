@@ -57,7 +57,8 @@ Gem::Specification.new do |spec|
     # of reading it as every port.  Pinned to the series for the reason
     # given under ucl below -- the failure mode of a quiet change here
     # is a port switched that should not be.
-    spec.add_dependency 'exsys', '~> 1.0'   # the hub, over its FT232 line
+    spec.add_dependency 'exsys', '~> 1.1'   # the hub, over its FT232 line,
+                                            #   and finding it on the host
     spec.add_dependency 'parallel'    # one openocd per board at a time
     spec.add_dependency 'tty-logger'
     spec.add_dependency 'uart'        # board consoles, in `connect`

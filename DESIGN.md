@@ -62,9 +62,9 @@ test/test-tribble-control    the regression suite, against a deployed copy
 
 ## The devlist is the only model of the bench
 
-`CLI#parse` reads the file with UCL, lifts out the four keys that are
-not devices — `reserved`, `undeclared`, `tally`, `types` — and treats
-everything else as a device entry.
+`CLI#parse` reads the file with UCL, lifts out the five keys that are
+not devices — `device`, `reserved`, `undeclared`, `tally`, `types` —
+and treats everything else as a device entry.
 
 A setting is then resolved by `attribute(id, key, default)`:
 
@@ -113,6 +113,9 @@ What is refused at load rather than discovered later:
     counts, which reads as a firmware saying nothing.
   * **`undeclared` set to anything but `protect` or `switch`.**  It
     decides what may be powered down.
+  * **A `device` that is a block or a list.**  A devlist is one bench,
+    and one bench is one hub; a file naming two would be a file whose
+    port numbers mean two different things.
 
 `port` is normalised to an Integer, or to `nil` for `none`, once at
 load — `port_of` is the only place that has to know what a port may
@@ -126,6 +129,98 @@ every walk of the bench goes through, so it is never selected, never
 switched, never flashed, and never counted among the ports that may be
 powered down.  `#declared` is the unfiltered list, for looking a serial
 up — which is the reason the entry is in the file at all.
+
+
+## Which hub, and why the devlist names it
+
+`ExSYS::ManagedUSB.available` returns every FTDI 0403:6001 on the host
+as `{ device:, serial:, usb_path: }`.  `CLI#hub_device` turns that plus
+what was asked for into the one line `ExSYS::ManagedUSB` is handed:
+
+```text
+hub_device(named)         named = -d, else the devlist's `device`, else nil
+
+    named has a '/' in it?          ──yes──▸  the serial line itself,
+                   │                          used as given
+                   no
+                   ▾
+    named looks like 1-1.2.4.4?     ──yes──▸  the candidate in that
+                   │                          socket, or an error
+                   no
+                   ▾
+    named at all?                   ──yes──▸  the candidate whose serial
+                   │                          it is, or an error listing
+                   no                         what the host does have
+                   ▾
+    exactly one candidate?          ──yes──▸  that one
+                   │
+                   no
+                   ▾
+               an error
+```
+
+The three shapes cannot collide: a serial is never digits and dashes in
+the USB-path shape, and neither of those contains a `/`.  The pattern
+is the gem's `ExSYS::ManagedUSB::USB_PATH`, published for exactly this
+— a caller taking a name from a human should not have to invent it.
+
+Two decisions are load-bearing:
+
+  * **Auto-detection refuses to guess between two.**  That FTDI id is a
+    hub's control adapter and equally every other FT232 on the host, so
+    picking the first enumerated is a coin toss — and driving the wrong
+    hub raises nothing anywhere.  The ports exist, the frames are
+    accepted, `usb status` answers, and the boards that go dark are on
+    the other bench.  There is no later check that could catch it, which
+    is why the guess is refused rather than warned about.
+  * **The serial line is what a file should never carry.**  The `1` in
+    `ttyUSB1` is neither the hub's number nor the USB device number: it
+    is the usbserial layer's index, and it is the lowest one free when
+    that adapter is probed.  It therefore depends on what else attached
+    first, and it is reused — unplug the adapter holding `ttyUSB0` and
+    the next thing to attach takes `ttyUSB0`.  Two hubs can swap names
+    across a reboot or while the machine is up, and every devlist
+    naming them that way then points at the other bench, silently.
+  * **A serial and a USB path are both stable, and not the same
+    promise.**  A serial is in the FT232's EEPROM and follows the
+    adapter; a USB path is a position in the tree and follows the
+    socket, so a replacement hub inherits it.  Naming one particular
+    hub is the serial's job and is the default advice.  The path exists
+    for the case the serial cannot cover — an adapter whose EEPROM
+    carries none, which otherwise has no stable name at all.  Both
+    platforms report one: Linux states it, and on FreeBSD the gem walks
+    it out of the sysctl tree.  Each host numbers in its own way,
+    though, so a path names a socket on the machine that reported it.
+    A path named on a host that reports none at all is refused with
+    that said, rather than as a path that is merely absent — the two
+    send a reader looking in different places.  A value with a `/` in it is taken as a path anyway — the
+    same rule `--openocd` uses — because a line reached some other way
+    still has to be nameable.
+
+The devlist is the place for it because a devlist is already one bench:
+the command that says which device list then says which hub, and that
+is the only thing it has to say.  `-d` stays for the one-off.
+
+The split with the `exsys` gem is along the same line as everywhere
+else: what a hub *is* belongs to the gem, what this bench *wants*
+belongs here.
+
+  * The gem reports. `ExSYS::ManagedUSB.available` knows the FTDI id
+    because it knows the hub, knows how to ask a Linux or a FreeBSD
+    host, and knows that a candidate is not a hub — every FT232 on the
+    machine matches, and telling them apart means opening the line and
+    writing to it.  So it lists, with serials, and decides nothing.
+  * This tool decides. `hub_device` is where the policy and the wording
+    live: what `-d` means against what the devlist says, that one
+    candidate may be taken and two may not, and what to print when it
+    refuses.  None of that is a fact about hubs; it is a fact about
+    this tool's promise not to switch the wrong bench.
+
+`Platform` keeps only the board-side lookups.  It has its own
+`udevadm`/`sysctl` plumbing for the probes and consoles, which is why
+the two readings look alike and are nonetheless not shared: one is
+about a bench's boards, the other about a product's control adapter,
+and the gem must work for callers that have no bench at all.
 
 
 ## each_device: the one path to a board
@@ -261,7 +356,7 @@ counts, which reads as a firmware saying nothing.
 
 ### A new host platform — a module under `Platform`
 
-A platform is a module under `Platform` holding five `def self.` methods.
+A platform is a module under `Platform` holding four `def self.` methods.
 `Platform::Current` is chosen by a `case` on `RbConfig::CONFIG['host_os']`
 at the foot of `platform.rb` — `/^linux-/` and `/^freebsd/` today, with
 anything else raising — and the module-level `def self.x(...) = Current.x(...)`
@@ -270,22 +365,46 @@ platform is a module plus a branch in that `case`.
 
 | Method                     | Answers                 | Today |
 | :------------------------- | :---------------------- | :---- |
-| `exsys_ctrl`               | the hub's control ttys  | both  |
 | `probe_consoles`           | `{probe serial => tty}` | both  |
-| `port_to_usb(port, root:)` | hub port → USB path     | Linux |
-| `usb_to_tty(path)`         | USB path → console tty  | Linux |
-| `usb_to_serial(path)`      | USB path → probe serial | Linux |
+| `port_to_usb(port, root:)` | hub port → USB path     | both  |
+| `usb_to_tty(path)`         | USB path → console tty  | both  |
+| `usb_to_serial(path)`      | USB path → probe serial | both  |
 
-The last three read `/sys/bus/usb`.  `Platform.serial_to_tty` is built
+Finding the *hub* is not among them: that is
+`ExSYS::ManagedUSB.available`, in the exsys gem.  What is here is
+finding the *boards*.
+
+The last three are about USB topology, and the two platforms differ in
+where that comes from.  Linux states it: `/sys/bus/usb` has a directory
+per device named by its path.  FreeBSD states nothing of the kind, so
+`port_to_usb` and the two lookups walk it out of the sysctl tree —
+`%location` gives the port a device occupies on its parent, `%parent`
+names that parent, and the walk ends at a root hub, whose `%location`
+is empty.  A walk that does not *reach* a root answers nil rather than
+what it collected: stopping one hub short turns `1-1.2.4.4` into `1-4`,
+which is not a broken string but a different socket.
+
+The one asymmetry left is that FreeBSD cannot see a device no driver
+claimed — there is no `dev.ugen` — so such a device has no node, no
+serial and no path.  Every probe the bench carries attaches something
+(a DAPLink is `umodem`, `umass` and `usbhid` at once), but a probe that
+enumerates and attaches nothing is invisible there rather than
+serial-less.  `Platform.serial_to_tty` is built
 on `probe_consoles` alone, needs no USB topology, and is therefore what
 lets a host without `/sys` reach a console at all.
 
-Two conventions for a platform that cannot implement all five:
+Two conventions for a platform that cannot implement all four — both
+platforms do today, and FreeBSD did not until its topology was walked
+rather than read, so a third is likely to arrive short again:
 
   * **Stub, do not omit.**  An undefined method arrives as
     `undefined method 'port_to_usb' for module ...`, which names an
     internal and tells the reader nothing.  Raise a `CLI::Error` that
-    says which piece is missing and which commands still work.
+    says which piece is missing and which commands still work.  Each
+    of the three topology methods has a second route to the same board
+    — `serial` addresses a probe by its serial and `power` by being
+    the only one on — so a platform missing all three still runs every
+    command.
   * **Use `private_class_method def self.…`** for helpers.  A bare
     `private` does nothing to a `def self.` singleton method, and a
     helper defined as an instance method on a module whose every caller
@@ -357,6 +476,10 @@ failed, which `CLI.run` turns into exit status 1.
   * **The version lives in `version.rb` alone.**  The gemspec reads it
     from there and `--version` prints the same constant, so a release
     cannot have two numbers.
+  * **A guess about which hub is never made when it could be wrong.**
+    Reaching the wrong hub is undetectable after the fact — every frame
+    is accepted and the boards that go dark are somebody else's — so
+    two candidates is an error, not a warning and not a default.
   * **Failure is reported before the bench is disturbed.**  A missing
     openocd, an unwritable `--debug` file and an unreadable devlist are
     all found before a port is switched.  Finding out that a path is
@@ -398,9 +521,13 @@ Two suites, layered the way the code is:
 | `rake test`       | the devlist layer and the hub exchange | nothing   |
 | `rake test:bench` | the whole tool, deployed               | the bench |
 
-`rake test` covers devlist parsing, types, tallies and the openocd
-command line, and drives the hub exchange itself against a pty emulator
-speaking the real frames.
+`rake test` covers devlist parsing, types, tallies, hub selection and
+the openocd command line, and drives the hub exchange itself against a
+pty emulator speaking the real frames.  Hub selection is tested against
+a stubbed `ExSYS::ManagedUSB.available`, since what is being asserted
+is the policy — which candidate is taken, and when none is — and not
+the `udevadm`/`sysctl` reading that finds them, which the gem tests
+against captured output of its own.
 
 The split is not an accident of history: nearly everything worth
 asserting is decided during devlist parsing, which happens before the

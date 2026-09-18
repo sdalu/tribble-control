@@ -1,5 +1,7 @@
 #
-# Host-specific ways of finding the hub, the probes and the consoles.
+# Host-specific ways of finding the boards: their probes, their
+# consoles, and their place in the USB tree.  Finding the HUB is the
+# exsys gem's (ExSYS::ManagedUSB.available).
 #
 require 'rbconfig'
 require 'shellwords'
@@ -18,94 +20,188 @@ module Platform
 # own serial, which is what makes a serial the key to a console.
 PROBE_VENDORS = %w[0d28 1366].freeze
 
+# Finding the HUB is not here: it is ExSYS::ManagedUSB.available, in
+# the exsys gem, which knows what a hub's control adapter is because it
+# knows the hub.  What is here is finding the BOARDS -- their probes,
+# their consoles, their place in the USB tree -- which is this tool's
+# own business and no gem's.
+
 module FreeBSD
-    def self.exsys_ctrl
-        self.sysctl('dev.uftdi').select {|_k, v|
-            v.dig(:'%pnpinfo') in { vendor: "0x0403", product: "0x6001" }
-        }.map {|_k, dev| '/dev/tty' + dev.dig(:ttyname) }
-    end
-
-    # The three that are Linux-only, and why they are stubbed rather
-    # than absent.
+    # The sysctl branches that describe the USB bus.
     #
-    # All three read /sys/bus/usb, which FreeBSD does not have, so
-    # --method usb cannot work here.  They are stubbed rather than left
-    # undefined, because an undefined one arrives as
+    # Not the whole dev tree: that is 78K of text here against 5K for
+    # these, and it is read afresh on every lookup rather than
+    # remembered, because --method power switches ports off and on
+    # underneath us and a remembered tree would describe a bench that
+    # has since changed.
     #
-    #     undefined method 'port_to_usb' for module
-    #     TribbleControl::Platform::FreeBSD
-    #
-    # which names an internal and tells the reader nothing about what
-    # to do.  Each says instead which piece is missing and what still
-    # works -- and what still works is every command, because each of
-    # the two that DEFAULT to --method usb has a second method needing
-    # no USB topology at all: 'serial' takes --method power, 'connect'
-    # takes --method serial, and probe_consoles below answers both.
-    LINUX_ONLY = 'is implemented for Linux only: it reads /sys/bus/usb,' \
-                 ' which this host does not have.  usb, flash and reset' \
-                 ' work here as they are; serial needs --method power,' \
-                 ' and connect needs --method serial'
-
-    def self.port_to_usb(_port, root: nil)
-        raise CLI::Error, "deriving a board's USB path from its hub port" \
-                          " #{LINUX_ONLY}"
-    end
-
-    def self.usb_to_tty(_path)
-        raise CLI::Error, "finding a board's console from its USB path" \
-                          " #{LINUX_ONLY}"
-    end
-
-    def self.usb_to_serial(_path)
-        raise CLI::Error, 'reading a probe serial from the USB descriptor' \
-                          " #{LINUX_ONLY}"
-    end
+    #   uftdi     the hub's control adapter
+    #   uhub      every hub, which is what the walk up to the bus
+    #             passes through and nothing else
+    #   umodem    a probe's CDC console -- the tty, and the serial
+    #   usbhid    a DAPLink's HID interface, and umass its drive:
+    #   umass     the same device under another driver, carrying the
+    #             same serial, so a probe whose CDC did not attach is
+    #             still answerable for
+    USB_OIDS = %w[dev.uftdi dev.uhub dev.umodem
+                  dev.usbhid dev.umass].freeze
 
     # Every debug probe's console, keyed by the probe's serial.
     #
-    # This is how a console is found without walking the USB tree,
-    # which is what /sys/bus/usb gives Linux and FreeBSD has no
-    # equivalent of: the probe reports its own serial, the devlist
-    # already carries that serial to address the board for flashing,
-    # and umodem says which tty the probe's CDC interface became.
+    # The probe reports its own serial, the devlist already carries
+    # that serial to address the board for flashing, and umodem says
+    # which tty the probe's CDC interface became.  No topology at all,
+    # which is what lets `connect --method serial` work anywhere.
     def self.probe_consoles
-        self.sysctl('dev.umodem').select {|_k, v|
-            vendor = v.dig(:'%pnpinfo', :vendor).to_s.delete_prefix('0x')
-            PROBE_VENDORS.include?(vendor)
-        }.to_h {|_k, dev|
-            [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev.dig(:ttyname) ]
+        self.usb_tree.filter_map {|name, dev|
+            next unless name.start_with?('umodem')
+            next unless self.probe?(dev)
+            # No ttyname, no console.  '/dev/tty' + '' is /dev/tty --
+            # the controlling terminal -- so an entry whose tty is not
+            # named yet used to map a probe's serial to the operator's
+            # own screen, which connect would then open and read as if
+            # it were a board.
+            next if dev[:ttyname].to_s.empty?
+            [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev[:ttyname].to_s ]
+        }.to_h
+    end
+
+    # The console of whatever is at that USB path, or nil.
+    #
+    # At the path or below it: an nRF52840-MDK puts its own hub on the
+    # socket and its DAPLink one level down, so the port leads to the
+    # hub and the tty belongs to the child.
+    def self.usb_to_tty(path, tree: nil)
+        raise ArgumentError if path.nil?
+        tree ||= self.usb_tree
+        dev   = self.devices_at(path, tree).find {|_n, d| d[:ttyname] }&.last
+        dev && ('/dev/tty' + dev[:ttyname].to_s)
+    end
+
+    # The probe serial of whatever is at that USB path, or nil.
+    #
+    # Read from the descriptor the kernel already has, as on Linux, so
+    # it needs no SWD session and no powering the rest of the bench
+    # down.  Several drivers may claim one probe -- an MDK's DAPLink is
+    # umodem, usbhid and umass at once -- and all of them report the
+    # device's serial, so the first that is a probe with one answers.
+    #
+    # The limit here that Linux does not have: a device NO driver
+    # claimed has no sysctl node at all, there being no dev.ugen, so it
+    # cannot be seen.  A probe that enumerates and attaches nothing is
+    # invisible rather than serial-less.
+    def self.usb_to_serial(path, tree: nil)
+        raise ArgumentError if path.nil?
+        tree ||= self.usb_tree
+        self.devices_at(path, tree).each do |_name, dev|
+            next unless self.probe?(dev)
+            serial = dev.dig(:'%pnpinfo', :sernum).to_s
+            return serial unless serial.empty?
+        end
+        nil
+    end
+
+    # Is this one of the debug probes a bench carries?
+    private_class_method def self.probe?(dev)
+        vendor = dev.dig(:'%pnpinfo', :vendor).to_s.delete_prefix('0x')
+        PROBE_VENDORS.include?(vendor)
+    end
+
+    # Everything sitting at that USB path, or below it, shallowest
+    # first and then by name so that the answer does not depend on the
+    # order sysctl happened to print.
+    private_class_method def self.devices_at(path, tree)
+        tree.filter_map {|name, dev|
+            p = self.usb_path(dev, tree)
+            next unless p == path || p&.start_with?("#{path}.")
+            [ p, name, dev ]
+        }.sort_by {|p, name, _| [ p.count('.'), p, name ] }
+         .map     {|_p, name, dev| [ name, dev ] }
+    end
+
+    # Where a device sits in the USB tree, as Linux would write it.
+    #
+    # FreeBSD states no such path, but every piece of one is in the
+    # sysctl tree: %location gives the bus and the port the device
+    # occupies on its parent, and %parent names that parent -- always a
+    # uhub, up to the root hub, whose own %location is empty.
+    #
+    # A walk that does not REACH the root answers nil rather than what
+    # it collected on the way: stopping one hub short turns 1-1.2.4.4
+    # into 1-4, which is not a broken string but a different socket.
+    #
+    # The exsys gem walks the same tree for its own device, and this is
+    # deliberately not that code: its walker is a documented internal
+    # of a gem that must stand alone, and a tool reaching into one is a
+    # tool that breaks on the next release.
+    private_class_method def self.usb_path(dev, tree)
+        bus    = nil
+        ports  = []
+        rooted = false
+        seen   = {}
+        while dev
+            loc = dev[:'%location']
+            unless loc.is_a?(Hash) && loc[:port]
+                rooted = true          # a root hub occupies no port
+                break
+            end
+            bus ||= loc[:bus]
+            ports.unshift(loc[:port])
+            parent = dev[:'%parent'].to_s
+            # A %parent chain that returns to a device already on the
+            # way up is not a tree.  No kernel prints one, but this
+            # parses whatever it is handed, and without the guard the
+            # answer is not a wrong path but an unbounded loop: a
+            # command that never returns and never says why.
+            break if seen[parent]
+            seen[parent] = true
+            dev = tree[parent]
+        end
+        return nil unless rooted && bus && !ports.empty?
+        "#{bus}-#{ports.join('.')}"
+    end
+
+    # Parse a sysctl -e dump into the shape below.  Split from the
+    # reading of it so that the tests can feed a capture in and run on
+    # a host with no bench, no probe, and no sysctl at all.
+    def self.parse_usb_tree(output)
+        output.lines.reduce({}) {|acc, l|
+            k, v       = l.chomp.split('=', 2)
+            next acc if k.nil?
+            dev, i, sk = k.split('.')[1..]
+            # No unit number in it -- dev.uhub.%parent -- so it
+            # describes the driver and not a device.
+            next acc if sk.nil? || i !~ /\A\d+\z/
+            if [ '%pnpinfo', '%location' ].include?(sk)
+                # Not every token in one of these is a pair: some
+                # drivers write a bare word, and a parser that died on
+                # one of them would take the whole bench with it.
+                v = Shellwords.shellsplit(v.to_s).filter_map {|e|
+                        k2, v2 = e.split('=', 2)
+                        [ k2.to_sym, v2 ] if v2
+                    }.to_h
+            end
+            acc.merge("#{dev}#{i}" => { sk.to_sym => v }) {|_k, o, n|
+                o.merge(n)
+            }
         }
     end
 
-    # Defined on the module, not as an instance method: every caller is
-    # a def self. above, so an instance method was unreachable and hub
-    # auto-detection died with NoMethodError before reading a single
-    # sysctl. private_class_method keeps it internal, which is what the
-    # bare private was reaching for and could not express.
-    private_class_method def self.sysctl(key)
-        `/sbin/sysctl -e -a #{key}`.lines.map(&:chomp).reduce({}) {|acc, l|
-            k, v  = l.split('=', 2)
-            i, sk = k.split('.')[2..]
-            next acc if sk.nil?
-            if [ '%pnpinfo', '%location' ].include?(sk)
-                v = Shellwords.shellsplit(v).to_h {|e| e.split('=', 2) }
-                              .transform_keys(&:to_sym)
-            end
-
-            acc.merge(Integer(i) => { sk.to_sym => v }) {|_k,o,n| o.merge(n) }
-        }
+    # The USB branches of the sysctl tree, as
+    #
+    #     { 'umodem0' => { :ttyname => 'U0', :'%parent' => 'uhub6',
+    #                      :'%location' => { :bus => '1', ... } } }
+    #
+    # Keyed by device name and not by unit number: several branches are
+    # read at once, %parent names a parent that way, and unit numbers
+    # repeat across drivers.
+    private_class_method def self.usb_tree
+        oids = USB_OIDS.map {|o| Shellwords.escape(o) }.join(' ')
+        self.parse_usb_tree(`/sbin/sysctl -e #{oids} 2>/dev/null`)
     end
 end
 
-
 module Linux
-    def self.exsys_ctrl
-        Dir['/sys/class/tty/ttyUSB*']
-            .map    {|path| self.udevadm_query(path) }
-            .select {|dev| dev in { ID_VENDOR_ID: '0403', ID_MODEL_ID: '6001' } }
-            .map    {|dev| dev[:DEVNAME] }
-    end
-
     # See FreeBSD.probe_consoles.  Matched on the probe's vendor, not
     # on one probe firmware: an MDK's DAPLink and a DWM1001-DEV's
     # J-Link OB both report a serial and both become a ttyACM.
@@ -114,27 +210,6 @@ module Linux
             .map    {|path| self.udevadm_query(path) }
             .select {|dev| PROBE_VENDORS.include?(dev[:ID_VENDOR_ID]) }
             .to_h   {|dev| [ dev[:ID_SERIAL_SHORT], dev[:DEVNAME] ] }
-    end
-
-    def self.port_to_usb(port, root:)
-        # USB ExSYS hub path
-        case root
-        when %r{^/dev/(\w+)}
-            tty = $1
-            unless self.udevadm_query(root)[:DEVPATH]
-                       .split(File::SEPARATOR) in [ *, root, _, _, _, ^tty, 'tty', ^tty ]
-                raise CLI::Error, "unable to identify USB path for #{root}"
-            end
-        when /^\d+-\d+(?:\.\d+)*$/ # USB path root
-        else raise CLI::Error, "unhandled USB root (#{root})"
-        end
-
-        # ExSYS USB hub is a 4x4 ports
-        port_i = ((port - 1) / 4) + 1
-        port_j = ((port - 1) % 4) + 1
-
-        # Path
-        "#{root}.#{port_i}.#{port_j}"
     end
 
     def self.usb_to_tty(path)
@@ -188,7 +263,6 @@ Current = case RbConfig::CONFIG['host_os']
           end
 
 
-def self.exsys_ctrl(...)       = Current.exsys_ctrl(...)
 def self.probe_consoles(...)   = Current.probe_consoles(...)
 
 # The console of the board whose probe carries this serial, or nil.
@@ -200,7 +274,33 @@ def self.serial_to_tty(serial)
     return nil if serial.nil?
     self.probe_consoles[serial.to_s]
 end
-def self.port_to_usb(...)      = Current.port_to_usb(...)
+# A board's USB path, from the hub port it is plugged into.
+#
+# +root+ is the hub's own place in the USB tree -- the node its
+# sixteen sockets hang off -- which CLI#hub_usb_root works out from
+# the control adapter the exsys gem reports.
+#
+# Nothing here is platform-specific any more, and that is the point.
+# Both platforms used to derive the root themselves from the control
+# LINE: Linux by pattern-matching udevadm's DEVPATH, FreeBSD by
+# finding the uftdi node and walking the sysctl tree up from it.  The
+# gem now reports the adapter's USB path as a public field of the
+# candidate it was chosen from, so the derivation was two
+# reimplementations of a thing already in hand.  What is left is the
+# geometry, which belongs to the hub and not to the host.
+#
+# The hub is four internal banks of four, so port 16 lands on
+# <root>.4.4 -- which is where the control adapter itself sits, and
+# why a board must never be put on port 16.  See THE HUB in the
+# manual.
+def self.port_to_usb(port, root:)
+    unless root.to_s.match?(ExSYS::ManagedUSB::USB_PATH)
+        raise CLI::Error, "unhandled USB root (#{root})"
+    end
+    port_i = ((port - 1) / 4) + 1
+    port_j = ((port - 1) % 4) + 1
+    "#{root}.#{port_i}.#{port_j}"
+end
 def self.usb_to_tty(...)       = Current.usb_to_tty(...)
 def self.usb_to_serial(...)    = Current.usb_to_serial(...)
 
