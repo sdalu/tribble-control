@@ -1,4 +1,26 @@
 require 'bundler/gem_tasks'
+require 'rake/clean'
+
+# What a build leaves behind, and -- more to the point -- what it does
+# not.
+#
+# CLOBBER is the built gem and the directory bundler packages it into,
+# both of which `rake build` puts back.  CLEAN is empty: nothing here
+# is compiled, so there is no intermediate to remove.  The task exists
+# all the same, because `clobber` is defined in terms of it and a
+# project that grows one wants it in the expected place.
+#
+# Deliberately NOT listed, though .gitignore names them:
+#
+#   *.log, *.hex   a capture from `connect` and a firmware image, which
+#                  land wherever the tool was run.  They are ignored
+#                  because they are not ours to track, not because they
+#                  are ours to delete -- `rake clobber` in a directory
+#                  where somebody ran a bench capture must not eat it.
+#   vendor/, bin/  a vendored bundle and its binstubs.  That is a
+#                  deployment, made once by hand and documented in the
+#                  README, and rebuilding it costs a network.
+CLOBBER.include('pkg', '*.gem')
 
 # Two suites, and `rake test` is the one that runs anywhere.
 #
