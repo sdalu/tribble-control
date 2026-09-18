@@ -247,7 +247,7 @@ say "a port with no board is reported, not captured silently" \
 # is overwritten.
 #
 # What it is for: the post-flash power cycle used to call @exsys.off()
-# with a raw port and no gate, so a board declared on a reserved port had
+# with a raw port and no gate, so a board declared on a protected port had
 # its VBUS cut for two seconds after every flash, with no --force and no
 # way to say no.  Ports 12-15 feed the Raspberry Pis.
 # The devnum of a board, waiting for it to enumerate.
@@ -295,7 +295,9 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
 
         ssh -o BatchMode=yes "root@$host" \
             "printf ':020000040007F3\\n:04F00000DEADBEEFD4\\n:00000001FF\\n' > /tmp/t-marker.hex
-             sed 's/^\\(reserved *= *\\[\\) /\\1 8, /' $dl > /tmp/t-res8.conf"
+             sed 's/^\\( *ports *= *\\[\\) /\\1 8, /' $dl > /tmp/t-prot8.conf
+             grep -q '^ *ports *= *\\[ 8,' /tmp/t-prot8.conf ||
+                 { echo 'FAIL  no protect { ports = [ ... ] } line in $dl to add port 8 to'; exit 1; }"
 
         # devnum, not 'usb status'.  A power CYCLE ends with the port on,
         # so a status check afterwards passes whether or not the port was
@@ -306,23 +308,23 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
         dbpath=/sys/bus/usb/devices/1-1.2.2.4          # DB, hub port 8
         before=$(devnum_of "$dbpath")
 
-        say "a reserved port is not cut after a flash" \
-            "NOT power-cycling" "$tc -D /tmp/t-res8.conf flash /tmp/t-marker.hex DB"
+        say "a protected port is not cut after a flash" \
+            "NOT power-cycling" "$tc -D /tmp/t-prot8.conf flash /tmp/t-marker.hex DB"
         after=$(devnum_of "$dbpath")
         if [ "$before" = "$after" ]; then
             echo "ok    and the board never lost power (devnum $after)"
         else
-            echo "FAIL  the reserved port WAS cut (devnum $before -> $after)"
+            echo "FAIL  the protected port WAS cut (devnum $before -> $after)"
             fail=$((fail + 1))
         fi
 
-        say "an unreserved port still gets its cycle" \
+        say "an unprotected port still gets its cycle" \
             "power-cycling after flash" "$tc -D $dl flash /tmp/t-marker.hex DB"
         cycled=$(devnum_of "$dbpath")
         if [ "$after" != "$cycled" ]; then
             echo "ok    and that board did lose power (devnum $after -> $cycled)"
         else
-            echo "FAIL  the unreserved port was NOT cycled (devnum unchanged)"
+            echo "FAIL  the unprotected port was NOT cycled (devnum unchanged)"
             fail=$((fail + 1))
         fi
 

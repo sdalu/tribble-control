@@ -47,12 +47,46 @@ class CLI
         end
     end
 
-    # devlist key listing ports that must never be powered down
-    RESERVED_KEY   = 'reserved'
+    # devlist block gathering everything that keeps a port powered.
+    #
+    # Two rules, one key.  'undeclared' says whether a port the file
+    # does not mention is protected -- yes, the default, is what keeps
+    # a power feed out of reach of a bare 'usb off' -- and 'ports' and
+    # 'nodes' name the ones protected whichever way that falls, which
+    # is how a port that IS declared is kept powered anyway.
+    #
+    # 'ports' takes port numbers and 'nodes' the names of devlist
+    # entries, which is the same protection said two ways.  A name is
+    # the better one where there is an entry to name: it survives the
+    # board moving socket, and it cannot go on protecting port 12 after
+    # port 12 became something else.  'ports' remains for what has no
+    # entry -- a power feed nothing drives, which is most of what ends
+    # up here.
+    #
+    # They were two top-level keys, 'undeclared' and 'reserved', which
+    # left 'protected' -- the word 'usb status' prints, and the one the
+    # manual gives a section to -- naming neither of them.  One key is
+    # what the docs already called the pair, and the whole policy is
+    # then read in one place rather than in two lines that have to be
+    # found first.
+    PROTECT_KEY            = 'protect'
+    PROTECT_UNDECLARED_KEY = 'undeclared'
+    PROTECT_PORTS_KEY      = 'ports'
+    PROTECT_NODES_KEY      = 'nodes'
+    PROTECT_KEYS           = [ PROTECT_UNDECLARED_KEY, PROTECT_PORTS_KEY,
+                               PROTECT_NODES_KEY ].freeze
 
-    # devlist key deciding the fate of ports the file does not mention
-    UNDECLARED_KEY = 'undeclared'
-    UNDECLARED     = [ :protect, :switch ].freeze
+    # What the block replaced, and how each is written now.
+    #
+    # A devlist from before the change is met with its new spelling.
+    # Without this 'reserved' falls through to the device pass and is
+    # refused as "devlist entry 'reserved' has no port" -- true, and no
+    # help at all, since the port line it asks for would load the file
+    # and leave every port it named switchable.
+    PROTECT_FORMER = {
+        'reserved'   => "#{PROTECT_KEY} { #{PROTECT_PORTS_KEY} = [ ... ] }",
+        'undeclared' => "#{PROTECT_KEY} { #{PROTECT_UNDECLARED_KEY} = yes|no }"
+    }.freeze
 
     # Shared settings a device can inherit, and the key that asks for
     # them.
@@ -174,7 +208,7 @@ class CLI
         opts.on '-r', '--require=FILE', Array,
                 'Ruby file(s) to load first, for the tallies',
                 '  they register (comma-separated)'
-        opts.on '-F', '--force',           'Switch undeclared ports too'
+        opts.on '-F', '--force',           'Switch protected ports too'
         opts.on       '--debug[=FILE]', 'Show debug output, and copy',
                                        'the whole log to FILE if given'
         opts.on '-v', '--[no-]verbose',    'Run verbosely'
@@ -323,14 +357,15 @@ class CLI
 
     # Initializer
     def initialize
-        @device        = nil
-        @hub_kind      = HUB_DEFAULT
-        @switch        = nil
-        @devlist       = nil
-        @reserved      = []
-        @undeclared    = :protect
-        @tally_default = TALLY_DEFAULT
-        @types         = {}
+        @device             = nil
+        @hub_kind           = HUB_DEFAULT
+        @switch             = nil
+        @devlist            = nil
+        @protect_ports      = []
+        @protect_nodes      = []
+        @protect_undeclared = true
+        @tally_default      = TALLY_DEFAULT
+        @types              = {}
         # :info, not :debug.  This was built at :debug, which made
         # --debug a flag that changed nothing -- the openocd command
         # lines it is supposed to reveal were printed on every run
@@ -525,20 +560,32 @@ class CLI
         }
     end
 
+    # The ports 'protect' names, by number and through its nodes.
+    #
+    # A node with 'port = none' contributes nothing -- there is no port
+    # to keep powered -- rather than raising.  A retired board left in
+    # the file is what 'port = none' is for, and the devlist does not
+    # become broken because that board's name is also protected.
+    def protected_ports
+        @protect_ports + @protect_nodes.filter_map {|n|
+            self.name_port(n).last if self.present?(n)
+        }
+    end
+
     # Ports tribble-control may power down.  Ports the devlist does not
-    # mention are protected unless 'undeclared' says otherwise, and ports
-    # named by 'reserved' are protected either way.  That is what keeps
-    # the Raspberry Pi power feeds out of reach.
+    # mention are protected unless 'protect { undeclared = no }' says
+    # otherwise, and the ports 'protect' names are protected either
+    # way.  That is what keeps the Raspberry Pi power feeds out of reach.
     def switchable
         if @devlist.nil?
             raise Error, 'no devlist: refusing to power down any port' \
                          ' (use -D FILE, or --force)'
         end
-        base = case @undeclared
-               when :protect then self.devices.map {|n| name_port(n).last }
-               when :switch  then @hub.ports
+        base = if @protect_undeclared
+               then self.devices.map {|n| name_port(n).last }
+               else @hub.ports
                end
-        (base - @reserved).tap {|l|
+        (base - self.protected_ports).tap {|l|
             raise Error, 'devlist leaves no switchable port' if l.empty?
         }
     end
@@ -569,7 +616,7 @@ class CLI
         return allowed if ports.empty?
         if (bad = ports - allowed).any?
             raise Error, "refusing to power down port(s) #{bad.join(' ')}:" \
-                         ' not switchable, being undeclared or reserved' \
+                         ' protected by the devlist' \
                          ' (use --force)'
         end
         ports
@@ -844,15 +891,56 @@ class CLI
         if opts.include?(:devlist)
             file = opts[:devlist]
             raise Error, "file #{file} doesn't exist" unless File.exist?(file)
-            raw       = UCL.load_file(file)
-            @reserved = Array(raw[RESERVED_KEY]).map {|p| Integer(p) }
+            raw = UCL.load_file(file)
 
-            if raw.include?(UNDECLARED_KEY)
-                @undeclared = raw[UNDECLARED_KEY].to_s.downcase.to_sym
-                unless UNDECLARED.include?(@undeclared)
-                    raise Error, "#{UNDECLARED_KEY} must be one of" \
-                                 " #{UNDECLARED.join(', ')}"
+            # The keys the 'protect' block replaced, caught before the
+            # device pass can take them for boards.
+            if (former = raw.keys & PROTECT_FORMER.keys).any?
+                raise Error, former.map {|k|
+                    "'#{k}' is no longer a devlist key:" \
+                      " write #{PROTECT_FORMER[k]}"
+                }.join('; ')
+            end
+
+            # What may never lose power.  Checked key by key because
+            # the whole point of the block is that a port listed in it
+            # stays on: a misspelled 'port = [ 13 ]' that was silently
+            # ignored would read as protection and be none, which is
+            # the one failure mode this file exists to prevent.
+            if raw.include?(PROTECT_KEY)
+                protect = raw[PROTECT_KEY]
+                unless protect.is_a?(Hash)
+                    raise Error, "#{PROTECT_KEY} must be a block:" \
+                                 " #{PROTECT_KEY} { #{PROTECT_PORTS_KEY}" \
+                                 ' = [ 13, 14 ] }'
                 end
+                if (bad = protect.keys - PROTECT_KEYS).any?
+                    raise Error, "#{PROTECT_KEY} has no" \
+                                 " #{bad.join(', ')} key; it takes" \
+                                 " #{PROTECT_KEYS.join(', ')}"
+                end
+                if protect.include?(PROTECT_UNDECLARED_KEY)
+                    undeclared = protect[PROTECT_UNDECLARED_KEY]
+                    unless [ true, false ].include?(undeclared)
+                        raise Error, "#{PROTECT_KEY}." \
+                                     "#{PROTECT_UNDECLARED_KEY} must be" \
+                                     ' yes or no'
+                    end
+                    @protect_undeclared = undeclared
+                end
+                # flatten: UCL turns a key written twice in one block
+                # into an array of its values, so a file with two
+                # 'ports' lines means both, not a nested list nothing
+                # can compare against a port number.
+                @protect_ports = Array(protect[PROTECT_PORTS_KEY])
+                                     .flatten.map do |p|
+                    Integer(p)
+                rescue ArgumentError, TypeError
+                    raise Error, "#{PROTECT_KEY}.#{PROTECT_PORTS_KEY} takes" \
+                                 " port numbers; '#{p}' is not one"
+                end
+                @protect_nodes = Array(protect[PROTECT_NODES_KEY])
+                                     .flatten.map(&:to_s)
             end
 
             if raw.include?(TALLY_KEY)
@@ -935,7 +1023,7 @@ class CLI
             end
 
             @devlist  = raw.reject {|k,_|
-                [ RESERVED_KEY, UNDECLARED_KEY, TALLY_KEY,
+                [ PROTECT_KEY, TALLY_KEY,
                   TYPES_KEY, DEVICE_KEY, HUB_KEY, SWITCH_KEY ].include?(k)
             }
 
@@ -995,6 +1083,15 @@ class CLI
                 }.join('; ')
                 raise Error, "devlist assigns the same #{PORT_KEY} more" \
                              " than once: #{detail}"
+            end
+
+            # Every protected node names an entry.  A name that matches
+            # nothing is a typo, and a typo here protects nothing while
+            # reading, in the file, exactly like protection.
+            if (unknown = @protect_nodes - @devlist.keys).any?
+                raise Error, "#{PROTECT_KEY}.#{PROTECT_NODES_KEY} names" \
+                             " #{unknown.map {|n| "'#{n}'" }.join(', ')}," \
+                             ' which the devlist does not declare'
             end
         end
 

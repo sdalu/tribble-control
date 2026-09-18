@@ -7,7 +7,8 @@
 #
 # A hub port may feed something that must never lose power, so
 # tribble-control refuses to switch off any port the devlist does not
-# declare, and any port it marks reserved; -F/--force lifts both rules.
+# declare, and any port its 'protect' block names; -F/--force lifts
+# both rules.
 #
 # Full documentation -- port map, device selection, recipes and traps --
 # is in man/man1/tribble-control.1, and is displayed by

@@ -11,7 +11,8 @@ require_relative 'helper'
 class TestHub < Minitest::Test
     include DevlistHelper
 
-    DEVLIST = "reserved = [ 16 ]\nA1 { port = 1 }\nA2 { port = 2 }\nA3 { port = 3 }\n"
+    DEVLIST = "protect { ports = [ 16 ] }\n" \
+              "A1 { port = 1 }\nA2 { port = 2 }\nA3 { port = 3 }\n"
 
     def setup
         @hub = FakeHub.new(state: 0b0110)          # ports 2 and 3 on
@@ -49,11 +50,11 @@ class TestHub < Minitest::Test
         assert_empty @hub.ports_on & [ 1, 2, 3 ]
     end
 
-    def test_a_reserved_port_is_refused_by_name
+    def test_a_protected_port_is_refused_by_name
         usb('on')
         e = assert_raises(TribbleControl::CLI::Error) { usb('off', '16') }
         assert_match(/refusing to power down port\(s\) 16/, e.message)
-        assert_includes @hub.ports_on, 16, 'the reserved port was cut anyway'
+        assert_includes @hub.ports_on, 16, 'the protected port was cut anyway'
     end
 
     def test_an_undeclared_port_is_protected_too

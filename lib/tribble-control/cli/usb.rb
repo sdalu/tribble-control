@@ -82,7 +82,7 @@ safe.include?(port) ? '' : '(protected)')
             offable(a.reject {|_,on| on }.keys, force: force)
 
             # A false default would sweep every unnamed port off, the
-            # reserved ones included.  Expand it over the switchable
+            # protected ones included.  Expand it over the switchable
             # ports instead, and leave the rest as they are.
             default = opts[:default]
             if (default == false) && !force

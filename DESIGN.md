@@ -68,8 +68,8 @@ test/test-tribble-control    the regression suite, against a deployed copy
 
 ## The devlist is the only model of the bench
 
-`CLI#parse` reads the file with UCL, lifts out the five keys that are
-not devices — `device`, `reserved`, `undeclared`, `tally`, `types` —
+`CLI#parse` reads the file with UCL, lifts out the six keys that are
+not devices — `device`, `hub`, `switch`, `protect`, `tally`, `types` —
 and treats everything else as a device entry.
 
 A setting is then resolved by `attribute(id, key, default)`:
@@ -117,8 +117,18 @@ What is refused at load rather than discovered later:
   * **A tally name nothing registered.**  A run that forgot its `-r`
     would otherwise capture a whole bench and report nothing but line
     counts, which reads as a firmware saying nothing.
-  * **`undeclared` set to anything but `protect` or `switch`.**  It
-    decides what may be powered down.
+  * **A key `protect` does not have, or an `undeclared` that is not a
+    boolean.**  The block decides what may be powered down, so a line
+    in it that is quietly ignored reads as protection and is none —
+    `port = [ 13 ]` for `ports` being the way to write that.
+  * **A `protect` `nodes` entry the devlist does not declare.**  Same
+    reason, one step further: a misspelled board name protects nothing
+    and looks in the file exactly like a protected board.
+  * **A top-level `reserved` or `undeclared`.**  The two keys the
+    `protect` block replaced are refused by name, with the line to
+    write instead.  Left to the device pass they would be refused as
+    entries with no port — true, and no help — and a devlist that then
+    gave them one would load with every port they named switchable.
   * **A `device` that is a block or a list.**  A devlist is one bench,
     and one bench is one hub; a file naming two would be a file whose
     port numbers mean two different things.
@@ -135,6 +145,38 @@ every walk of the bench goes through, so it is never selected, never
 switched, never flashed, and never counted among the ports that may be
 powered down.  `#declared` is the unfiltered list, for looking a serial
 up — which is the reason the entry is in the file at all.
+
+### What must not lose power is one block
+
+`protect` holds the whole power-down policy: `undeclared` for the ports
+the file does not mention, `ports` and `nodes` for the ones it names.
+
+One key because *protected* is the word the tool already uses — `usb
+status` prints `(protected)`, the manual gives it a section, and the
+refusals say the devlist protects a port.  As two top-level keys,
+`undeclared` and `reserved`, that word named neither of them, and the
+reader had to find two lines to know what a bench refuses to switch.
+`undeclared` is a boolean rather than the old `protect`/`switch` pair
+for the same reason: under a key called `protect`, a value called
+`protect` says the same word twice.
+
+`nodes` exists because the alternative is writing a port number twice.
+A protected board named by number appears in its own entry and again in
+`ports`, and the two disagree the moment it moves socket — silently,
+because both numbers are still valid ports.  A name resolves through
+the entry, so one line says where the board is.  `ports` stays for what
+has no entry, though declaring the thing is usually better even when
+nothing drives it: `usb status` then prints a name beside the protected
+port instead of a dash.  The cost is that protecting by name and
+driving by name are one namespace — a declared power feed is not
+switchable, but it can still be *selected*, and a command naming it
+will try to reach a board that is not there.
+
+The two keys the block replaced are refused by name rather than
+accepted as aliases.  An alias keeps two spellings of one rule alive
+for a file that one tool reads on one bench, and the reader then has to
+know both; the break costs one edit per devlist, paid once, loudly, and
+before anything is switched.
 
 
 ## The hub is an interface, and the ExSYS hub is one of them
@@ -680,7 +722,7 @@ failed, which `CLI.run` turns into exit status 1.
   * **Only `SP` is ever issued.**  Port states are set for the here and
     now, never written to the hub's flash, so nothing the tool does
     survives a hub power cycle.  `FP`, `WP`, `RD` and `RH` are not used
-    — the last two drop every port, reserved ones included.
+    — the last two drop every port, protected ones included.
   * **The version lives in `version.rb` alone.**  The gemspec reads it
     from there and `--version` prints the same constant, so a release
     cannot have two numbers.
@@ -769,7 +811,10 @@ tool, so it can be pointed at a deliberately broken one: a test that
 has never been seen to fail is not evidence.  What stays baked into it
 is that bench's inventory — board names, a probe serial, a USB path,
 the flash page the gate writes — and pointing the suite at another
-bench means editing them.
+bench means editing them.  The power-cycle gate needs one thing of
+that bench's devlist as well: a `protect { ports = [ ... ] }` line to
+add the flashed board's port to.  It says so and stops rather than
+running a test that could only pass.
 
 `rake lint` gates at zero rubocop offences and runs with `rake`.  A
 linter at zero is a gate; at several hundred it is a wall nobody reads.

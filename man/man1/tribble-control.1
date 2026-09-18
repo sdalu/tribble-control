@@ -452,7 +452,7 @@ instrumented bench supply.
 Two of these commands are worth fearing.
 RH resets the hub and RD
 restores factory defaults; either drops every port, which power\-cycles
-everything on the hub, reserved ports included.
+everything on the hub, protected ports included.
 tribble\-control never
 issues them, and the exsys gem only does so via #reset and
 #factory_reset, both of which require an explicit confirm: true.
@@ -490,13 +490,17 @@ is the only thing that tells tribble\-control which ports it may touch.
 .Bd -literal
 device     = AL03GD7X           # which hub these ports are on
 hub        = exsys              # which KIND; 'usb' is the other
-undeclared = protect            # the default; see PROTECTED PORTS
-reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
+protect {                       # what must not lose power;
+    undeclared = yes            #   see PROTECTED PORTS
+    ports      = [ 13, 14, 15, 16 ]
+    nodes      = [ rpi ]
+}
 
 alpha   { serial = '1026360216055e5b0000...97969902', port = 1    }
 beta    {                                             port = 2    }
 gamma   { serial = '1026360213072dde0000...97969902', port = 4    }
 retired { serial = '1026360202c4dc0f0000...97969902', port = none }
+rpi     {                                             port = 12   }
 .Ed
 .Pp
 Indentation is not significant, but separators are: two keys on one line
@@ -521,8 +525,8 @@ somebody forgot would drop a live board silently.
 Two entries claiming
 one port is refused at load, none excepted.
 .Pp
-Every key other than 'device', 'hub', 'switch', 'reserved',
-\&'undeclared', 'tally' and 'types' is a device.
+Every key other than 'device', 'hub', 'switch', 'protect',
+\&'tally' and 'types' is a device.
 A command
 given no device names operates on all of them.
 Names may be used anywhere
@@ -655,10 +659,10 @@ Both are described under
 .Sx THE HUB ,
 and \-\-hub overrides the first for a one\-off.
 .Pp
-\&'reserved' lists ports that must never be powered down.
-\&'undeclared' says what to do with every port the file does not
-mention.
-Both are described under
+\&'protect' says what must never be powered down: ports by number,
+devlist entries by name, and every port the file does not mention
+unless it says otherwise.
+It is described under
 .Sx PROTECTED PORTS .
 \&'tally' sets the bench's default tally, described under
 .Sx TALLIES .
@@ -718,11 +722,14 @@ A type is a block of settings, not a thing that can have a type of its
 own.
 .El
 .Pp
-A misspelled 'reserverd' becomes a device named reserverd, which would
-silently unprotect every reserved port.
-That one is now caught: every
+A misspelled 'protetc' becomes a device named protetc, which would
+silently unprotect every port the block named.
+That one is caught: every
 device entry must carry a port, so the misspelling is refused at load
-with "devlist entry 'reserverd' has no port".
+with "devlist entry 'protetc' has no port".
+A key misspelled INSIDE the block is caught by name, the block taking
+\&'undeclared', 'ports' and 'nodes' and nothing else \(em a 'port = [ 13 ]'
+quietly ignored would read as protection and be none.
 Validation stops there,
 though \(em a serial, an interface or a baud that is wrong is wrong
 silently \(em so after editing this file still run 'usb status' and read
@@ -733,28 +740,43 @@ a powered peripheral, anything the bench feeds but does not drive.
 Nothing
 communicates with them, so nothing notices if their VBUS disappears \(em they
 simply reboot, uncleanly, mid\-write.
-Two devlist keys keep that from
-happening.
+One devlist block keeps that from
+happening, with three keys.
 .Pp
 \&'undeclared' decides the fate of every port the devlist does not mention:
-.Bl -tag -width "undeclared = protect"
-.It Li "undeclared = protect"
+.Bl -tag -width "undeclared = yes"
+.It Li "undeclared = yes"
 The default.
 Only ports declared in the devlist may be powered down.
-.It Li "undeclared = switch"
+.It Li "undeclared = no"
 Any port the hub has may be powered down.
 .El
 .Pp
-\&'reserved' names ports that are never powered down whichever mode is in
-force, so it protects a port even when that port is a declared device:
+\&'ports' and 'nodes' name what is never powered down whichever way that
+falls, so either protects a port even when that port is a declared
+device.
+\&'ports' takes port numbers, 'nodes' the names of devlist entries:
 .Bd -literal
-reserved = [ 13, 14, 15, 16 ]
+protect {
+    undeclared = yes
+    ports      = [ 13, 14, 15, 16 ]
+    nodes      = [ rpi ]
+}
 .Ed
+.Pp
+Prefer the name where there is an entry to name.
+The port number is then written once rather than twice, the protection
+follows the board if it moves socket, and 'usb status' prints the name
+next to the protected port instead of a dash.
+A name no entry declares is refused at load: a misspelling there would
+protect nothing while reading, in the file, exactly like protection.
+A name whose entry says 'port = none' is allowed and protects nothing,
+there being no port to keep powered.
 .Pp
 Together:
 .Bd -literal
 tribble\-control powers down a port only if the devlist allows it,
-and never one the devlist reserves.
+and never one the devlist protects.
 .Ed
 .Pp
 This is enforced at every path that can cut power, not just the obvious
@@ -770,8 +792,8 @@ Naming a
 protected port is an error, not a silent skip:
 .Bd -literal
 $ tribble\-control \-D devlist.conf usb off 14
-tribble\-control: refusing to power down port(s) 14: not switchable,
-being undeclared or reserved (use \-\-force)
+tribble\-control: refusing to power down port(s) 14: protected by the
+devlist (use \-\-force)
 .Ed
 .Pp
 Without a devlist there is no safe set, so power\-down is refused outright.
@@ -900,7 +922,7 @@ stay powered.
 \-\-default=BOOL sets what happens to ports 'set' does not name; it goes
 before the word 'set'.
 Without \-\-force it is applied only to
-switchable ports, so it cannot sweep a reserved port off.
+switchable ports, so it cannot sweep a protected port off.
 \&'status' is read\-only: it asks the hub for its port states and prints
 every port with its device name, its state, and whether the devlist
 lets tribble\-control switch it.
@@ -1161,7 +1183,7 @@ tribble\-control \-D devlist.conf usb off gamma && sleep 2 && \e
 tribble\-control \-D devlist.conf usb on  gamma
 .Ed
 .Pp
-Deliberately reboot a device on a reserved port (the only case for
+Deliberately reboot a device on a protected port (the only case for
 \-\-force).
 This is a hard power cut; shut the device down over the
 network first:

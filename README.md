@@ -125,8 +125,12 @@ command does not run, so upgrade in that order.
 hub    = exsys
 device = AL03GD7X
 
-# Ports that must never be powered down.
-reserved = [ 13, 14, 15, 16 ]
+# What must never be powered down: ports by number, entries by name,
+# and every port the file does not mention unless 'undeclared = no'.
+protect {
+  ports = [ 13, 14, 15, 16 ]
+  nodes = [ rpi ]
+}
 
 # What a KIND of board is, said once instead of on every board.
 types {
@@ -148,6 +152,12 @@ alpha {
 # reset or flashed in parallel.
 gamma {
   port = 2
+}
+
+# Something the bench only feeds.  Declaring it is what lets 'protect'
+# name it, and what puts 'rpi' in the 'usb status' row for port 12.
+rpi {
+  port = 12
 }
 
 # `port = none` keeps the record of a board that has left the bench.
@@ -256,9 +266,9 @@ offering one would offer a hub every command against it then failed on.
 
 The ports are the hub's own: 1 to the `bNbrPorts` its hub descriptor
 reports, read once when the hub is opened.  The fixed sixteen is the
-ExSYS hub's alone, and `undeclared = protect` earns its keep here — on a
-dock, one hub port feeds the next hub in the chain and another feeds the
-Ethernet adapter, and neither is a port to sweep off.
+ExSYS hub's alone, and `protect { undeclared = yes }` earns its keep
+here — on a dock, one hub port feeds the next hub in the chain and
+another feeds the Ethernet adapter, and neither is a port to sweep off.
 
 
 ## What "off" does
@@ -325,11 +335,18 @@ A hub port carries whatever is plugged into it, and cutting VBUS on a
 single-board computer reboots it mid-write.  So powering a port *down*
 is guarded, and powering one *up* is not:
 
-  * Ports the devlist does not mention are protected.  `undeclared =
-    switch` at the top of the file lifts that for the unmentioned ones.
-  * Ports named by `reserved` are protected whichever mode is in force.
+  * Ports the devlist does not mention are protected.  `protect {
+    undeclared = no }` lifts that for the unmentioned ones.
+  * Ports `protect` names are protected whichever mode is in force —
+    `ports` for a number, `nodes` for the name of a devlist entry,
+    which protects whichever port that entry says the board is on.
   * `-F`/`--force` lifts both.  Without a devlist at all,
     `tribble-control` refuses to power anything down.
+
+The two keys this replaced — `reserved`, and `undeclared` at the top of
+the file — are refused by name, each with the line to write instead.  A
+devlist written for 0.2.0 or earlier does not load and does not switch
+anything until its protection is rewritten as the block above.
 
 `usb status` prints the hub's own view next to the devlist's, so you
 can see what is on and what may be switched before switching it.  The
