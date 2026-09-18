@@ -27,7 +27,7 @@ class TestHub < Minitest::Test
 
     def test_status_reads_the_real_port_state
         assert_equal [ 2, 3 ], @hub.ports_on
-        assert_equal [ 2, 3 ], @cli.exsys.get(:on)
+        assert_equal [ 2, 3 ], @cli.hub.state.select {|_, on| on }.keys
     end
 
     def test_on_names_every_port_outright
@@ -94,7 +94,7 @@ class TestHub < Minitest::Test
     def test_a_wrong_password_is_reported_not_swallowed
         hub = FakeHub.new(state: 0, password: 'other')
         cli = cli_for(DEVLIST, '-p', 'pass', device: hub.path)
-        assert_raises(ExSYS::ManagedUSB::Error) {
+        assert_raises(TribbleControl::Hub::Error) {
             TribbleControl::CLI::USB.new(cli).run([ 'on', '1' ], force: false) }
     ensure
         hub&.close

@@ -3,10 +3,11 @@
 .Os
 .Sh NAME
 .Nm tribble-control
-.Nd power, flash and monitor the devices on an ExSYS managed USB hub
+.Nd power, flash and monitor the devices on a switchable USB hub
 .Sh SYNOPSIS
 .Nm
 .Op Fl d Ar DEV
+.Op Fl -hub Ar KIND
 .Op Fl D Ar FILE
 .Op Fl m Ar TYPE
 .Op Fl W Ar SECONDS
@@ -21,10 +22,20 @@
 .Nm
 .Fl -man | -help | -version
 .Sh DESCRIPTION
-The hub switches VBUS on each port independently, driven over an FT232
-serial line.
+The hub switches its ports independently, and there are two kinds of
+it.
+The ExSYS managed hub, the default, switches VBUS on each of its
+sixteen sockets over an FT232 serial line wired inside it, and
 tribble\-control drives that line.
-For a board on it that
+Any standard USB hub with per\-port power switching is the other
+\(em 'hub = usb' in the devlist, or \-\-hub usb \(em and it is switched on
+the bus itself, with hub\-class requests through
+.Xr usbconfig 8 ,
+which makes it
+.Fx
+only for now.
+See THE HUB.
+For a board on either that
 carries a debug probe, tribble\-control additionally speaks SWD through
 openocd and reads the board's console over USB CDC.
 Which probe and
@@ -115,6 +126,103 @@ gem of anybody's.
 It is expected at /usr/bin/openocd and found elsewhere with
 \-\-openocd; flash and reset check for it before switching anything, and
 connect \-\-reset when it reaches for it.
+.Ss A standard hub with per-port power switching
+Everything above is the ExSYS hub.
+\&'hub = usb' at the top of a devlist, or \-\-hub usb on the command line,
+drives any hub that switches its own ports instead.
+Nothing about it is an agreement with one manufacturer: what is spoken
+is the USB hub class, which every hub answers \(em the hub descriptor
+says how many ports there are, GET_STATUS says whether one is powered,
+and SET_FEATURE/CLEAR_FEATURE of PORT_POWER switches it.
+The ports are that hub's own, 1 to the bNbrPorts its descriptor
+reports, read once when the hub is opened.
+The fixed sixteen, and the 4\-by\-4 geometry \-\-method usb rests on, are
+the ExSYS hub's alone.
+.Pp
+The kind has to be said because it cannot be read off the
+.Cm device
+value: a USB path such as 1\-1.1 names the FT232's socket for an ExSYS
+hub and the hub itself for a usb hub, so the same line would mean two
+different hubs.
+It names what the hub IS and not which tool drives it, so a devlist
+written today keeps working when another host learns to drive such a
+hub.
+.Pp
+Today that host is
+.Fx
+only:
+.Xr usbconfig 8
+is what issues the requests, and no other host here has a command that
+sends an arbitrary control request to a hub.
+Root is not among the requirements.
+The ugen nodes are root:operator 0660, and the kernel asks for the
+driver privilege only for SET_ADDRESS, SET_CONFIG and SET_INTERFACE,
+so a hub\-class port feature request passes: membership of group
+operator is the whole of it
+.Pq Ic pw groupmod operator -m yourname ,
+then log in again.
+Without it every request answers "Permission denied" and
+.Nm
+says so, naming the group.
+.Pp
+Which hub, when the host has more than one, works as it does for the
+other kind: one candidate is taken, two or more are refused and listed
+\(em each with its serial, its ugen name, its USB path and its port
+count, semicolons between them, the count being the only thing that
+tells two of the same part apart when neither carries a serial.
+Root hubs are never candidates.
+They are the controller a host's own sockets hang off, and a port of
+one has no PORT_POWER to clear, so offering one would offer a hub every
+command against it then failed on.
+See
+.Fl d
+under
+.Sx OPTIONS
+for the three shapes a name may take.
+.Pp
+What 'off' then does to the socket is the one thing software cannot
+find out, and
+.Cm switch
+in the devlist is how it is told.
+A hub with no power switch wired still reports the port unpowered and
+still drops the link, so the device vanishes from the host and comes
+back either way.
+.Bl -tag -width "switch = link" -compact
+.It Li "switch = link"
+The default.
+\&'off' takes the port off the bus and the board stays powered.
+.It Li "switch = vbus"
+\&'off' cuts the socket's power.
+.El
+.Pp
+Watch a board's LED to find out which this hub is: put a board that
+lights up on a port, run 'usb off' for that port, and look.
+An LED that goes out is vbus; an LED that stays lit while the board
+disappears from the host is link.
+Test the socket the bench will use \(em the USB 2 and USB 3 sides of one
+physical socket are different ports on different hubs, and a hub may
+switch neither.
+The ExSYS hub refuses the key rather than ignoring it: it always cuts
+power, and a line that changes nothing is a line somebody will trust.
+.Pp
+Under 'switch = link' everything that powers down still works.
+\&'usb off', 'toggle' and 'set' behave, the board vanishes from the host
+exactly as a power cut would, and \-\-method power still identifies a
+board by being the only one openocd can see.
+What does not happen is the board restarting, so every power\-down
+warns once, naming the ports that stay powered, and the after\-flash
+power cycle is skipped with a warning rather than pretended \(em see
+.Sx TRAPS .
+.Pp
+After every switch the port's status is read back, and the command
+fails if the power bit did not follow.
+That read\-back is the tool's only measurement of whether a hub
+switches at all: one that accepts CLEAR_FEATURE(PORT_POWER), answers OK
+and leaves the port up would otherwise have 'usb off' report success on
+a bench it never touched.
+Nothing is refused on what a hub DECLARES about its switching, for the
+same reason \(em the dock's Genesys hub declares ganged and switches per
+port anyway.
 .Sh OPTIONS
 Ordering matters, and it is the thing most likely to waste your afternoon.
 Global options come before the command; a command's own options come after
@@ -145,6 +253,25 @@ the USB path shape, so the adapter sitting in that socket on this host
 .It Cm AL03GD7X
 anything else, so the FT232's serial number
 .El
+.Pp
+With
+.Fl -hub Cm usb
+the three shapes name a hub of that kind instead:
+.Bl -tag -width "1-1.2.4.4" -compact
+.It Cm ugen1.4
+the ugen shape, so that device, used as given
+.It Cm 1-1.1
+the USB path shape, so the hub in that socket on this host
+.It Cm AC0528515619
+anything else, so the hub's own serial number
+.El
+.Pp
+ugen1.4 is that kind's /dev/ttyUSB1 and carries the same warning below:
+the number is enumeration order \(em ugen1.4 is the fourth device the
+second controller attached \(em so a replug renumbers it, and a devlist
+naming a hub that way points at whatever attached in its place.
+Write the serial, which follows the hub, or the USB path, which follows
+the socket.
 .Pp
 Three answers, in the order they are trusted: this option, then the
 devlist's own
@@ -197,6 +324,18 @@ which the exsys gem installs and which lists one adapter per line, its
 line then its serial \(em or by asking
 .Nm
 for a serial that does not exist, since the refusal lists them.
+.It Fl -hub Ns = Ns Ar KIND
+Which kind of hub to drive:
+.Cm exsys
+(the default) or
+.Cm usb .
+Overrides the devlist's own
+.Cm hub
+line.
+The option takes those two words only; a devlist naming another kind is
+refused at load with both listed.
+See
+.Sx THE HUB .
 .It Fl D , Fl -devlist Ns = Ns Ar FILE
 The device list.
 Required for any power\-down at all, and by any command taking device
@@ -221,11 +360,13 @@ Switch ports the devlist does not allow.
 See
 .Sx PROTECTED PORTS .
 .It Fl p , Fl -password Ns = Ns Ar STRING
-Supplies the hub password; it does not change it.
+Supplies the ExSYS hub's password; it does not change it.
 Default
 .Sq pass .
 A wrong one makes the hub answer E01 and the command abort loudly, not
 silently.
+A usb hub has no password, so the option is refused there rather than
+ignored.
 .It Fl r , Fl -require Ns = Ns Ar FILE Ns Op , Ns Ar FILE ...
 Ruby files to load before anything else runs, for the tallies they
 register.
@@ -259,7 +400,7 @@ Per\-command: 'usb' takes \-\-default=BOOL, 'connect' takes \-\-off.
 Both are
 described under COMMANDS.
 .Sh "HUB PROTOCOL, AND WHAT IT CANNOT TELL YOU"
-The hub speaks a small ASCII protocol over the FT232 line.
+The ExSYS hub speaks a small ASCII protocol over the FT232 line.
 Recovered from
 the vendor's own cusba64 binary (which ships unstripped), the complete
 vocabulary is eight commands, each terminated by CR, answering 'G...' on
@@ -315,6 +456,32 @@ everything on the hub, reserved ports included.
 tribble\-control never
 issues them, and the exsys gem only does so via #reset and
 #factory_reset, both of which require an explicit confirm: true.
+.Ss What a usb hub is asked
+A hub of the other kind needs no gem and no serial line: the switching
+is on the bus itself, and the whole vocabulary is four control requests
+issued through
+.Xr usbconfig 8 ,
+by absolute path so that nothing depends on whoever's PATH the command
+was started with.
+.Bd -literal
+/usr/sbin/usbconfig \-d ugenB.D do_request ...
+
+  0xa0 0x06 0x2900 0 9     hub descriptor, USB 2
+  0xa0 0x06 0x2a00 0 12    hub descriptor, SuperSpeed
+  0xa3 0x00 0x0000 P 4     GET_PORT_STATUS of port P
+  0x23 0x03 0x0008 P 0     SET_FEATURE   PORT_POWER, port P
+  0x23 0x01 0x0008 P 0     CLEAR_FEATURE PORT_POWER, port P
+.Ed
+.Pp
+Both descriptors are asked for and whichever the hub answers decides
+how its port status word is read from then on; the other is refused,
+which is the only way to learn which kind of hub this is.
+The hubs themselves are found with '/sbin/sysctl \-e dev.uhub'.
+.Pp
+Nothing here outlives the hub either: PORT_POWER is set for the here
+and now, exactly as SP is above, and no descriptor is written.
+And there is no per\-port telemetry on this side either, for the reason
+already given \(em no USB hub reports per\-port draw to the host.
 .Sh DEVLIST
 A UCL file mapping a device name to a hub port, and optionally to the
 board's debug\-probe serial number.
@@ -322,6 +489,7 @@ It is what \-D/\-\-devlist points at, and it
 is the only thing that tells tribble\-control which ports it may touch.
 .Bd -literal
 device     = AL03GD7X           # which hub these ports are on
+hub        = exsys              # which KIND; 'usb' is the other
 undeclared = protect            # the default; see PROTECTED PORTS
 reserved   = [ 13, 14, 15, 16 ] # ports that must not lose power
 
@@ -353,8 +521,8 @@ somebody forgot would drop a live board silently.
 Two entries claiming
 one port is refused at load, none excepted.
 .Pp
-Every key other than 'device', 'reserved', 'undeclared', 'tally' and
-\&'types' is a device.
+Every key other than 'device', 'hub', 'switch', 'reserved',
+\&'undeclared', 'tally' and 'types' is a device.
 A command
 given no device names operates on all of them.
 Names may be used anywhere
@@ -475,6 +643,18 @@ See
 under
 .Sx OPTIONS
 for how to read one.
+\&'hub' is which KIND of hub that is: 'exsys', the default and
+everything described so far, or 'usb' for any hub that switches its own
+ports.
+\&'switch' is what such a hub's 'off' does to the socket: 'link', the
+default, takes the port off the bus and leaves the board powered, and
+\&'vbus' cuts the power.
+It applies to 'hub = usb' alone, and an ExSYS hub refuses it rather
+than ignoring it.
+Both are described under
+.Sx THE HUB ,
+and \-\-hub overrides the first for a one\-off.
+.Pp
 \&'reserved' lists ports that must never be powered down.
 \&'undeclared' says what to do with every port the file does not
 mention.
@@ -562,7 +742,7 @@ happening.
 The default.
 Only ports declared in the devlist may be powered down.
 .It Li "undeclared = switch"
-Any of the 16 may be powered down.
+Any port the hub has may be powered down.
 .El
 .Pp
 \&'reserved' names ports that are never powered down whichever mode is in
@@ -584,7 +764,8 @@ You do not
 have to reason about which commands are dangerous; they all go through the
 same gate.
 .Pp
-So a bare 'usb off' means "every switchable port", not "all 16".
+So a bare 'usb off' means "every switchable port", not "every port the
+hub has".
 Naming a
 protected port is an error, not a silent skip:
 .Bd -literal
@@ -595,7 +776,7 @@ being undeclared or reserved (use \-\-force)
 .Pp
 Without a devlist there is no safe set, so power\-down is refused outright.
 .Pp
-\-F/\-\-force lifts both rules and restores the old "all 16 ports" behaviour.
+\-F/\-\-force lifts both rules and restores the old "every port" behaviour.
 It is the only way to deliberately reboot a power\-only device, and it is a
 hard VBUS cut, not a shutdown: the device loses power mid\-write, with
 whatever consequences that has for its filesystem.
@@ -605,7 +786,8 @@ It cannot strand you,
 though \(em the host runs off its own supply, not off the hub.
 .Pp
 Powering *on* is never guarded: 'usb on' with no arguments still turns on
-all 16 ports, which is the state the bench should normally sit in.
+every port the hub has, which is the state the bench should normally sit
+in.
 .Sh DEVICE SELECTION
 Flashing one of six identical boards means telling openocd which one.
 There are three ways, chosen with \-m/\-\-method:
@@ -683,6 +865,11 @@ openocd adapter usb location 1\-1.2.2.1
                                └──────── hub root
 .Ed
 .Pp
+That geometry is the ExSYS hub's own.
+A usb hub has none to account for, so a port there is one component
+below the hub's own path: a board on port 3 of the hub at 1\-1.1 is at
+1\-1.1.3.
+.Pp
 The location is documentation of intent rather than a selector: openocd
 0.12 ignores 'adapter usb location' for CMSIS\-DAP, reaching the same
 adapter whichever path it is given, including one that does not exist.
@@ -703,8 +890,12 @@ Drive hub port power directly.
 \&'set' takes PORT:STATE pairs, where
 STATE is any of on/off/1/0/true/false/t/f.
 With no arguments, 'on'
-means all 16 ports, while 'off' and 'toggle' mean every switchable
-port (see PROTECTED PORTS).
+means every port the hub has, while 'off' and 'toggle' mean every
+switchable port (see PROTECTED PORTS).
+On a hub whose
+.Cm switch
+is link, everything that powers down says so, naming the ports that
+stay powered.
 .Pp
 \-\-default=BOOL sets what happens to ports 'set' does not name; it goes
 before the word 'set'.
@@ -979,6 +1170,30 @@ tribble\-control \-D devlist.conf \-\-force usb off 14 && sleep 2 && \e
 tribble\-control \-D devlist.conf usb on 14
 .Ed
 .Pp
+Find out what a usb hub's 'off' really does, before writing
+\&'switch = vbus' in a devlist.
+Put a board whose LED lights up on a port, watch the LED, and cut that
+port:
+.Bd -literal
+tribble\-control \-\-hub usb \-D dock.conf usb status
+tribble\-control \-\-hub usb \-D dock.conf usb off gamma
+.Ed
+.Pp
+An LED that goes out is vbus; an LED that stays lit while the board
+disappears from the host is link.
+Do it on the socket the bench will actually use: the USB 2 and USB 3
+sides of one physical socket are different ports on different hubs, and
+a hub may switch neither.
+.Pp
+List the switchable hubs this host has, to fill in 'device':
+.Bd -literal
+tribble\-control \-\-hub usb usb status
+.Ed
+.Pp
+With one candidate that command drives it.
+With two or more it refuses and lists them \(em serial, ugen name, USB
+path and port count \(em which is what to copy into the devlist.
+.Pp
 Flash from a script, failing the build if any board failed:
 .Bd -literal
 #!/bin/sh
@@ -1096,6 +1311,46 @@ on the other bench.
 The hub password defaults to 'pass' (\-p/\-\-password to change it).
 It
 guards writes to the hub, not reads.
+.Pp
+\&'switch = link' means nothing restarts.
+A board on a port taken off the bus vanishes from the host exactly as a
+power cut would, so every command that powers down still works and
+\-\-method power still selects a board by being the only one visible \(em
+but the board keeps running and keeps its state.
+Every power\-down says so once, naming the ports that stay powered, and
+.Ic flash
+skips the after\-flash power cycle with a warning instead of pretending:
+a cycle that only re\-enumerates the probe would leave the board in the
+very state power_cycle exists to clear.
+.Pp
+The power bit is not the same bit on both kinds of hub.
+A USB 2 hub reports it in 0x0100 of wPortStatus; a SuperSpeed hub
+reports it in 0x0200 and puts the link state in bits 5\-8, so reading a
+SuperSpeed port with the USB 2 bit answers "unpowered" for a port that
+is fine.
+Which hub descriptor the hub ANSWERS \(em 0x29 or 0x2a \(em is what
+decides how its status word is read from then on.
+.Pp
+.Xr usbconfig 8
+exits 0 for a request the hub refused, printing REQUEST = <ERROR>, and
+exits 0 for a device it could not even find.
+The printed text is the truth; the status says nothing.
+.Pp
+A dock's hub chain may reset on its own.
+The pair of TUSB8041 hubs on the dock this was written against detached
+and re\-attached every few minutes under test, taking every board with
+them.
+A hub that flaps is a poor bench hub whatever its descriptor declares,
+and the tool cannot tell that apart from a bench somebody unplugged.
+.Pp
+The LED test is the only proof that a hub switches VBUS.
+The read\-back after a switch proves the hub did what it was told, not
+that the socket lost power: a hub with no power switch wired clears the
+bit and drops the link, reports itself unpowered, and leaves the board
+running.
+Watch a board's LED through 'usb off', on the socket the bench will
+use, and write the answer down as
+.Cm switch .
 .Sh FILES
 .Bl -tag -width /usr/bin/openocd
 .It Pa devlist.conf
@@ -1108,8 +1363,17 @@ See
 .It Pa /usr/bin/openocd
 The openocd binary, overridable with
 .Fl -openocd .
+.It Pa /usr/sbin/usbconfig
+How a usb hub is switched, and not overridable: this program switches
+benches, and what it runs must not depend on whoever's PATH it was
+started with.
+.It Pa /sbin/sysctl
+How the hubs of a
+.Fx
+host are found, read as 'sysctl \-e dev.uhub'.
 .El
 .Sh SEE ALSO
-.Xr openocd 1
+.Xr openocd 1 ,
+.Xr usbconfig 8
 .Sh AUTHORS
 .An Stephane D'Alu Aq Mt sdalu@sdalu.com

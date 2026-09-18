@@ -1,11 +1,10 @@
 #
 # Host-specific ways of finding the boards: their probes, their
-# consoles, and their place in the USB tree.  Finding the HUB is the
-# exsys gem's (ExSYS::ManagedUSB.available).
+# consoles, and their place in the USB tree.  Finding the HUB is each
+# Hub backend's own (Hub::ExSYS.open, through the exsys gem).
 #
 require 'rbconfig'
 require 'shellwords'
-require 'exsys/managed-usb'
 
 module TribbleControl
 
@@ -20,11 +19,12 @@ module Platform
 # own serial, which is what makes a serial the key to a console.
 PROBE_VENDORS = %w[0d28 1366].freeze
 
-# Finding the HUB is not here: it is ExSYS::ManagedUSB.available, in
-# the exsys gem, which knows what a hub's control adapter is because it
-# knows the hub.  What is here is finding the BOARDS -- their probes,
-# their consoles, their place in the USB tree -- which is this tool's
-# own business and no gem's.
+# Finding the HUB is not here: that is the Hub backend's, and for the
+# ExSYS hub it is the exsys gem's, which knows what a hub's control
+# adapter is because it knows the hub.  Nor is the hub's geometry --
+# which socket a port is -- which is Hub#usb_path.  What is here is
+# finding the BOARDS -- their probes, their consoles, their place in
+# the USB tree -- which is this tool's own business and no gem's.
 
 module FreeBSD
     # The sysctl branches that describe the USB bus.
@@ -134,7 +134,8 @@ module FreeBSD
     # deliberately not that code: its walker is a documented internal
     # of a gem that must stand alone, and a tool reaching into one is a
     # tool that breaks on the next release.
-    private_class_method def self.usb_path(dev, tree)
+    # Public: Hub::USB walks the same tree, for the hub's own path.
+    def self.usb_path(dev, tree)
         bus    = nil
         ports  = []
         rooted = false
@@ -195,7 +196,8 @@ module FreeBSD
     # Keyed by device name and not by unit number: several branches are
     # read at once, %parent names a parent that way, and unit numbers
     # repeat across drivers.
-    private_class_method def self.usb_tree
+    # Public: Hub::USB walks the same tree, to find the hubs in it.
+    def self.usb_tree
         oids = USB_OIDS.map {|o| Shellwords.escape(o) }.join(' ')
         self.parse_usb_tree(`/sbin/sysctl -e #{oids} 2>/dev/null`)
     end
@@ -274,33 +276,7 @@ def self.serial_to_tty(serial)
     return nil if serial.nil?
     self.probe_consoles[serial.to_s]
 end
-# A board's USB path, from the hub port it is plugged into.
-#
-# +root+ is the hub's own place in the USB tree -- the node its
-# sixteen sockets hang off -- which CLI#hub_usb_root works out from
-# the control adapter the exsys gem reports.
-#
-# Nothing here is platform-specific any more, and that is the point.
-# Both platforms used to derive the root themselves from the control
-# LINE: Linux by pattern-matching udevadm's DEVPATH, FreeBSD by
-# finding the uftdi node and walking the sysctl tree up from it.  The
-# gem now reports the adapter's USB path as a public field of the
-# candidate it was chosen from, so the derivation was two
-# reimplementations of a thing already in hand.  What is left is the
-# geometry, which belongs to the hub and not to the host.
-#
-# The hub is four internal banks of four, so port 16 lands on
-# <root>.4.4 -- which is where the control adapter itself sits, and
-# why a board must never be put on port 16.  See THE HUB in the
-# manual.
-def self.port_to_usb(port, root:)
-    unless root.to_s.match?(ExSYS::ManagedUSB::USB_PATH)
-        raise CLI::Error, "unhandled USB root (#{root})"
-    end
-    port_i = ((port - 1) / 4) + 1
-    port_j = ((port - 1) % 4) + 1
-    "#{root}.#{port_i}.#{port_j}"
-end
+
 def self.usb_to_tty(...)       = Current.usb_to_tty(...)
 def self.usb_to_serial(...)    = Current.usb_to_serial(...)
 

@@ -15,6 +15,8 @@
 #
 require_relative 'tribble-control/version'
 require_relative 'tribble-control/platform'
+require_relative 'tribble-control/hub'
+require_relative 'tribble-control/hub/exsys'
 require_relative 'tribble-control/cli'
 require_relative 'tribble-control/tally'
 

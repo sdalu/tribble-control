@@ -31,8 +31,9 @@ Command#run(argv, **opts)
       │       power  : one board powered at a time; bench left off
       │
       ├──▸ openocd(*cmds, **hopts)       flash, reset, connect --reset
-      └──▸ Platform.usb_to_tty           connect
-           Platform.serial_to_tty
+      ├──▸ Platform.usb_to_tty           connect
+      │    Platform.serial_to_tty
+      └──▸ hub.on / hub.off / hub.state  every switch, through Hub
 ```
 
 Everything that touches hardware is below `each_device`.  Everything
@@ -48,14 +49,18 @@ exe/tribble-control          the executable; it only calls CLI.run
 lib/tribble-control.rb       what `require 'tribble-control'` loads
 lib/tribble-control/
     version.rb             the one place the version number lives
-    platform.rb            Linux/FreeBSD ways of finding hardware
+    platform.rb            Linux/FreeBSD ways of finding the boards
+    hub.rb                 what any hub answers: ports, state, on, off
+    hub/exsys.rb           the ExSYS hub, over the exsys gem
+    hub/usb.rb             any hub that switches its own ports, via usbconfig
     tally.rb               the seam where firmware knowledge goes
     cli.rb                 options, devlist, each_device, openocd
     cli/*.rb               one file per command (usb, flash, ...)
 man/man1/tribble-control.1   the manual (mdoc), rendered by --man
 examples/devlist.conf      a device list to copy and edit
 test/test_*.rb             minitest: everything that needs no hub
-test/support/fake_hub.rb   a pty speaking the hub's real frames
+test/support/fake_hub.rb   a pty speaking the ExSYS hub's real frames
+test/support/fake_usbconfig.rb  a host answering sysctl and usbconfig
 test/test-tribble-control    the regression suite, against a deployed copy
 ```
 
@@ -131,14 +136,104 @@ powered down.  `#declared` is the unfiltered list, for looking a serial
 up — which is the reason the entry is in the file at all.
 
 
+## The hub is an interface, and the ExSYS hub is one of them
+
+Every switch in the program goes through `TribbleControl::Hub`: `ports`,
+`state`, `on`, `off`, `toggle`, `set`, `usb_path(port)` and `vbus?`,
+plus `to_s` for the messages.  `CLI#hub` holds the one instance, the
+commands reach it through the `hub` delegate, and nothing above
+`each_device` knows which kind it is.
+
+Two backends answer it.  `Hub::ExSYS` wraps `ExSYS::ManagedUSB`, and
+everything in this section that is about the FT232, the gem, or the
+4-by-4 geometry lives in that class and not in `CLI`.  `Hub::USB`
+(`lib/tribble-control/hub/usb.rb`) drives any hub that switches its own
+ports, through `usbconfig` hub-class requests: the hub descriptor says
+how many ports there are, `GET_STATUS` says whether one is powered, and
+SET_FEATURE/CLEAR_FEATURE of PORT_POWER switches it.  It needs no gem,
+because the switching is on the bus itself rather than on a serial line
+wired beside it, and it is FreeBSD-only for now — the refusal is in
+`Hub::USB.open`, so nothing above it knows about platforms.
+`Hub.backend(kind)` maps the devlist's `hub =` word to the class and
+requires it on demand, so a host lacking what one backend needs still
+runs the other.
+
+Five decisions shape the second backend, and none of them is a fact
+about hubs that the first one contradicts:
+
+  * **The kind is declared, never inferred.**  `hub = exsys|usb` says
+    what the hub *is*, not which tool drives it on this host, so the
+    same devlist line keeps working the day a Linux implementation
+    lands.  It cannot be read off `device =`: a USB path such as
+    `1-1.1` names an FT232's socket for the ExSYS hub and the hub
+    itself for a usb hub.  Inferring the kind from the shape of the
+    name was rejected for exactly that, and so were `usbconfig` and
+    `freebsd` as names for the key — both name the driver rather than
+    the hardware.
+  * **`switch = link|vbus` is the operator's to declare.**  Software
+    cannot tell whether a hub's power switch is wired to the socket: a
+    hub with none still reports the port unpowered and drops the link,
+    and the device vanishes and returns either way.  Measured on the
+    dock's Genesys hub on 2026-09-18 — a flash drive detached and
+    re-enumerated on CLEAR/SET_FEATURE(PORT_POWER), while an
+    nRF52840-MDK's LED stayed lit through two five-second cuts, on the
+    USB 2 and on the USB 3 side of the same socket.  So the operator
+    watches a board's LED through `usb off` and writes the answer down.
+    A mode built on `usbconfig power_off` was rejected: on FreeBSD 15
+    it only unconfigures the device and clears `PORT_ENABLE` on the
+    parent port, keeps VBUS, and needs root — the `USB_RE_ENUM_PWR_OFF`
+    branch of /usr/src/sys/dev/usb/usb_hub.c, and the
+    `priv_check(PRIV_DRIVER)` in the set-power-mode ioctl of
+    /usr/src/sys/dev/usb/usb_generic.c — so the hub-class request does
+    strictly more with less privilege.
+  * **Link mode works everywhere except where it cannot.**  A board on
+    a port taken off the bus vanishes from the host exactly as a power
+    cut would, so `usb off/on/toggle/set` behave and `--method power`
+    still identifies a board by being the only one visible to openocd.
+    What does not happen is the board restarting, so every power-down
+    warns once naming the ports that stay powered (`CLI#warn_link_only`)
+    and the after-flash cycle is skipped with a warning
+    (`lib/tribble-control/cli/flash.rb`).  Doing the cycle silently was
+    rejected: the board
+    would keep the very state the cycle exists to clear.
+  * **The read-back is the only measurement.**  After every SET/CLEAR
+    the backend reads the port status back and raises if the power bit
+    did not follow.  A hub that switches nothing accepts the request
+    and answers OK, so without this `off` would report success on a
+    bench it had not touched.  It is also why nothing is refused on
+    `wHubCharacteristics`: the dock's Genesys hub declares ganged
+    switching and switches per port anyway, and the descriptor is a
+    claim where the read-back is a measurement.  Refusing hubs that
+    declare ganged or no switching was rejected on that.
+  * **Membership of group `operator`, and not root.**  The ugen nodes
+    are `root:operator` 0660, and the kernel's `usb_check_request`
+    (/usr/src/sys/dev/usb/usb_util.c) demands the driver privilege only for
+    SET_ADDRESS, SET_CONFIG and SET_INTERFACE; hub-class port feature
+    requests pass.  The backend turns the kernel's "Permission denied"
+    into a message naming the group rather than passing it on.
+
+The base class carries the last guard: a switching method handed an
+empty list, or a port the hub does not have, raises `Hub::Error` before
+a backend sees it.  Every caller checks first — see the invariants —
+so this is the net and not the trapeze, but a fourth path into the hub
+that forgets is now stopped rather than read as "every port".
+
+A backend answering less than the interface says so by name
+(`NotImplementedError` naming the class and method) rather than as a
+`NoMethodError` on an internal — the same rule `Platform` has for a
+host that cannot implement a lookup.  Its errors are `Hub::Error`,
+which `CLI.run` prints as one line; `Hub::ExSYS` translates the gem's
+own error class into it so the commands never see the gem's.
+
+
 ## Which hub, and why the devlist names it
 
 `ExSYS::ManagedUSB.available` returns every FTDI 0403:6001 on the host
-as `{ device:, serial:, usb_path: }`.  `CLI#hub_device` turns that plus
-what was asked for into the one line `ExSYS::ManagedUSB` is handed:
+as `{ device:, serial:, usb_path: }`.  `Hub::ExSYS.open` turns that
+plus what was asked for into the one line the gem is handed:
 
 ```text
-hub_device(named)         named = -d, else the devlist's `device`, else nil
+Hub::ExSYS.open(named)    named = -d, else the devlist's `device`, else nil
 
     named has a '/' in it?          ──yes──▸  the serial line itself,
                    │                          used as given
@@ -197,6 +292,20 @@ Two decisions are load-bearing:
     same rule `--openocd` uses — because a line reached some other way
     still has to be nameable.
 
+`Hub::USB.open` holds the same policy in its own shapes: a ugen name is
+a device used as given, `1-1.1` is a USB path, anything else is a
+serial, and the three cannot collide either.  Auto-detection takes a
+lone candidate and refuses two or more, listing each with its serial,
+its ugen name, its USB path and its port count — the count being what
+tells two of the same part apart when neither carries a serial.  Root
+hubs are never candidates: they are the controller, their `%location` is
+empty and their parent is a usbusN, and a port of one has no PORT_POWER
+to clear, so offering one would offer a hub every command against it
+then failed on.  Discovery reads `sysctl -e dev.uhub` and asks each
+candidate for its hub descriptor, so a hub that will not answer one is
+listed all the same with no port count — a listing must not be stopped
+by one odd hub — and choosing that hub is what is refused.
+
 The devlist is the place for it because a devlist is already one bench:
 the command that says which device list then says which hub, and that
 is the only thing it has to say.  `-d` stays for the one-off.
@@ -210,11 +319,14 @@ belongs here.
     host, and knows that a candidate is not a hub — every FT232 on the
     machine matches, and telling them apart means opening the line and
     writing to it.  So it lists, with serials, and decides nothing.
-  * This tool decides. `hub_device` is where the policy and the wording
-    live: what `-d` means against what the devlist says, that one
-    candidate may be taken and two may not, and what to print when it
-    refuses.  None of that is a fact about hubs; it is a fact about
-    this tool's promise not to switch the wrong bench.
+  * This tool decides. `Hub::ExSYS.open` is where the policy and the
+    wording live: what `-d` means against what the devlist says, that
+    one candidate may be taken and two may not, and what to print when
+    it refuses.  None of that is a fact about hubs; it is a fact about
+    this tool's promise not to switch the wrong bench.  It sits in the
+    backend rather than in `CLI` because the shapes a name may take —
+    an FT232 serial, a socket, a serial line — are this hub's shapes,
+    and another kind of hub is named in other ways.
 
 `Platform` keeps only the board-side lookups.  It has its own
 `udevadm`/`sysctl` plumbing for the probes and consoles, which is why
@@ -228,7 +340,7 @@ The gemspec requires `exsys` as `~> 1.2`, and this tool is exactly the
 caller that floor is for.  Under 1.1, a FreeBSD control adapter whose
 tty was not named yet came back from `ExSYS::ManagedUSB.available` as
 `:device` `/dev/tty` — the string `/dev/tty` plus an empty ttyname —
-and `hub_device` takes a lone candidate without asking, so `usb off`
+and `Hub::ExSYS.open` takes a lone candidate without asking, so `usb off`
 on such a host would have opened the operator's own controlling
 terminal and written SP frames at it.  1.2 reports no candidate at all
 for an adapter whose tty is not named.
@@ -241,7 +353,7 @@ carrying no message.  The second one matters here because `CLI.run`
 prints the message and nothing else: an error without one is the whole
 of what the operator is told, at the moment the line went quiet.
 
-The alternative was a guard here — `hub_device` refusing a candidate
+The alternative was a guard here — `Hub::ExSYS.open` refusing a candidate
 whose device is `/dev/tty` — and it was rejected.  That would paper
 over a gem defect inside one caller and leave every other caller of
 the gem exposed, and discovery is the gem's half of the split above.
@@ -407,18 +519,17 @@ platform is a module plus a branch in that `case`.
 | `usb_to_tty(path)`    | USB path → console tty  | both  |
 | `usb_to_serial(path)` | USB path → probe serial | both  |
 
-Finding the *hub* is not among them: that is
-`ExSYS::ManagedUSB.available`, in the exsys gem.  What is here is
-finding the *boards*.
+Finding the *hub* is not among them: that is the hub backend's
+(`Hub::ExSYS.open`, through the exsys gem).  What is here is finding
+the *boards*.
 
-`port_to_usb(port, root:)` is not among them either, for a different
-reason: it is defined once at `Platform` level rather than per host, and
-it walks nothing.  What is left in it is the hub's geometry — four
-internal banks of four, so a board on a port is at `root.bank.slot` —
-and geometry belongs to the hub, not to the host.  The `root` comes in
-from `CLI#hub_usb_root`, which works it out from the USB path the gem
-reports for the control adapter.  A new platform module neither defines
-it nor needs to.
+Nor is the hub's geometry — which socket a port is — which used to be
+a `Platform.port_to_usb` and is now `Hub#usb_path(port)`.  It walks
+nothing: for the ExSYS hub it is four internal banks of four under the
+control adapter's own root, so a board on a port is at
+`root.bank.slot`, and the root is the adapter's path less its last two
+components.  Geometry belongs to the hub, not to the host, and a new
+platform module neither defines it nor needs to.
 
 The last two are about USB topology, and the two platforms differ in
 where that comes from.  Linux states it: `/sys/bus/usb` has a directory
@@ -456,6 +567,51 @@ rather than read, so a third is likely to arrive short again:
     helper defined as an instance method on a module whose every caller
     is a `def self.` is simply unreachable.
 
+### A new hub backend — a subclass of `Hub`
+
+A backend is a subclass of `Hub` in a file under
+`lib/tribble-control/hub/`, listed in `Hub::KINDS` under the word a
+devlist's `hub =` line uses, and loaded on demand by
+`Hub.backend(kind)`.  What it has to answer:
+
+| Method               | Answers                                          |
+| :------------------- | :----------------------------------------------- |
+| `ports`              | every port, in order, numbered as the hub does   |
+| `state`              | `{ port => true/false }`, for every port         |
+| `on` `off` `toggle`  | switch the ports named                           |
+| `usb_path(port)`     | where a board on that port is in the USB tree    |
+| `to_s`               | the hub as a message names it                    |
+
+Two have defaults in the base class: `set` is an on and an off, which a
+backend that can apply a whole configuration in one exchange overrides,
+and `vbus?` answers true, the honest answer for a hub built to switch
+VBUS.  The rest raise `NotImplementedError` naming the class and the
+method, so a backend answering less than the interface says so by name
+rather than as a `NoMethodError` on an internal.  Errors are
+`Hub::Error` and carry a message, because `CLI.run` prints the message
+and nothing else.  The base class also holds the last guard: an empty
+port list, or a port the hub has not got, raises before the backend
+sees it.
+
+Naming and refusal policy lives in the backend's own `open`, not in
+`CLI`: which shapes a name may take, that one candidate may be taken
+and two may not, and the wording of each refusal.  None of that is a
+fact about hubs — it is this tool's promise not to switch the wrong
+bench — and the shapes differ by kind.  A platform refusal belongs
+there too; `Hub::USB.open` is where FreeBSD-only is said, so a host that
+cannot run one backend still runs the other.
+
+A backend is testable without hardware, and the two show the two ways.
+`Hub::USB` takes an injected runner, so `test/support/fake_usbconfig.rb`
+*is* the host: it answers `sysctl -e dev.uhub` with a tree in the real
+format and each `do_request` with the exact text usbconfig prints,
+angle brackets and the trailing ASCII copy included, and a hub built
+with `honours: false` accepts a switch and does not switch, which is the
+only way to drive the read-back check.  `Hub::ExSYS` goes the other way,
+against `test/support/fake_hub.rb` on a pty speaking the real frames.
+A new backend picks whichever its transport allows; the policy tests
+stand on the fake either way.
+
 ### A new command — a class under `CLI`
 
 Subclass `CLI::Command` in a file under `lib/tribble-control/cli/`, and
@@ -481,7 +637,7 @@ The instance gets `@cli`, and delegates the whole bench vocabulary to it:
 
 | Call                      | Gives back                                     |
 | :------------------------ | :--------------------------------------------- |
-| `exsys`                   | the hub object (`ExSYS::ManagedUSB`)           |
+| `hub`                     | the hub object (a `Hub`; today `Hub::ExSYS`)   |
 | `tty`                     | the logger (`TTY::Logger`), or `nil`           |
 | `openocd(*cmds, **hopts)` | `true` on success; a block gets `(ok, output)` |
 | `each_device(ids, &b)`    | as above; with no block, an Enumerator         |
@@ -508,13 +664,18 @@ failed, which `CLI.run` turns into exit status 1.
     turn-by-turn off of `--method power`, the cycle a board's
     `power_cycle` key asks for after a flash.  A protected port there
     is a reason to skip the step and say so, not to abort an operation
-    that has already succeeded.  Nothing calls `@exsys.off` with a raw
+    that has already succeeded.  Nothing calls `@hub.off` with a raw
     port and no gate.
   * **An empty list never means "every port".**  `offable` either
-    returns a non-empty list or raises; `usb on` tests for empty itself
-    before choosing between `on()` and `on(*ports)`; `each_device`
-    guards its selection.  Those are the three, and a fourth path into
-    the hub needs the same care.
+    returns a non-empty list or raises; `usb on` names every port
+    outright (`hub.on(*hub.ports)`) rather than passing an "all";
+    `each_device` guards its selection.  Those are the three, and
+    `Hub#selection` is the net under them: a backend is never handed an
+    empty list, whatever a fourth path forgets.
+  * **The commands talk to `Hub`, not to a backend.**  A method the
+    interface does not name is a method the next backend will not
+    have.  Add it to `Hub` first, with a default or as a
+    `NotImplementedError`, and then to the backends.
   * **Only `SP` is ever issued.**  Port states are set for the here and
     now, never written to the hub's flash, so nothing the tool does
     survives a hub power cycle.  `FP`, `WP`, `RD` and `RH` are not used
@@ -550,6 +711,23 @@ failed, which `CLI.run` turns into exit status 1.
   * **`tty-logger` builds its handlers at construction.**  `#configure`
     does not revisit the level, so `--debug` replaces the logger rather
     than reconfiguring it.
+  * **The power bit is not the same bit on both kinds of hub.**  A USB
+    2 hub (descriptor 0x29) reports it in 0x0100 of wPortStatus; a
+    SuperSpeed hub (0x2a) reports it in 0x0200 and puts the link state
+    in bits 5-8, so reading a SuperSpeed port with the USB 2 bit
+    answers "unpowered" for a port that is fine.  Which descriptor the
+    hub *answers* is what decides, and is remembered for that.
+  * **`usbconfig` exits 0 for a request the hub refused**, printing
+    `REQUEST = <ERROR>`, and exits 0 for a device it could not even
+    find.  The printed text is the truth; the status says nothing.
+  * **A dock's hub chain may reset on its own.**  The pair of TUSB8041
+    hubs on the dock this was written against detached and re-attached
+    every few minutes under test, taking every board with them.  A hub
+    that flaps is a poor bench hub whatever its descriptor declares.
+  * **The LED test is the only proof that a hub switches VBUS.**  The
+    read-back proves the hub did what it was told, not that the socket
+    lost power: a hub with no switch wired clears the bit, drops the
+    link, reports itself unpowered, and leaves the board running.
   * **A DWM1001-DEV may need a power cycle after a flash.**  It comes
     out of the openocd sequence in a state where its DW1000 never
     reports a transmission again; an SWD reset alone does not clear it.
@@ -570,10 +748,14 @@ Two suites, layered the way the code is:
 `rake test` covers devlist parsing, types, tallies, hub selection and
 the openocd command line, and drives the hub exchange itself against a
 pty emulator speaking the real frames.  Hub selection is tested against
-a stubbed `ExSYS::ManagedUSB.available`, since what is being asserted
+a stubbed `ExSYS::ManagedUSB.available` under `Hub::ExSYS`, since what is being asserted
 is the policy — which candidate is taken, and when none is — and not
 the `udevadm`/`sysctl` reading that finds them, which the gem tests
-against captured output of its own.
+against captured output of its own.  The usb backend is proved the same
+way and with no hub either: an injected runner stands in for the host,
+so the descriptor reading, the port numbering, the link-mode warnings
+and the read-back that catches a hub which accepts a switch and does
+not switch are all asserted against `test/support/fake_usbconfig.rb`.
 
 The split is not an accident of history: nearly everything worth
 asserting is decided during devlist parsing, which happens before the

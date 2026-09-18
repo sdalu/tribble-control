@@ -57,7 +57,8 @@ class Connect < CLI::Command
         if opts[:off]
             off_ports = offable(force: opts[:force])
             tty&.info "Starting from off state: #{off_ports.join(' ')}"
-            exsys.off(*off_ports)
+            hub.off(*off_ports)
+            warn_link_only(off_ports)
         end
 
         connected = []

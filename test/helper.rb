@@ -47,11 +47,12 @@ module DevlistHelper
 
     def log_of(cli) = @logs.fetch(cli).string
 
-    # The error a devlist is refused with, or nil if it loads.
+    # The error a devlist is refused with, or nil if it loads.  Hub
+    # selection refuses as Hub::Error, the devlist itself as CLI::Error.
     def refusal_for(devlist, *argv, **kws)
         cli_for(devlist, *argv, **kws)
         nil
-    rescue TribbleControl::CLI::Error => e
+    rescue TribbleControl::CLI::Error, TribbleControl::Hub::Error => e
         e.message
     end
 

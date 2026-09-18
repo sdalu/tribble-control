@@ -1,28 +1,31 @@
 # tribble-control
 
-Power, flash and monitor the boards plugged into an ExSYS 16-port
-managed USB hub, from the host that owns the hub.
+Power, flash and monitor the boards plugged into a switchable USB hub,
+from the host that owns the hub.
 
-The hub switches VBUS on each of its sixteen sockets independently,
-driven over an FT232 serial line internal to the hub.  `tribble-control`
-drives that line.  For a socket carrying a board with a debug probe it
-also speaks SWD through openocd and reads the board's console over USB
-CDC.  Everything else on the hub is a load it can switch and nothing
-more.
+Two kinds of hub.  The ExSYS 16-port managed hub, the default, switches
+VBUS on each of its sixteen sockets independently, over an FT232 serial
+line internal to the hub; `tribble-control` drives that line.  Any
+standard USB hub with per-port power switching is the other (`hub =
+usb`), switched on the bus itself with hub-class requests through
+`usbconfig`, and so on FreeBSD only for now.  For a socket carrying a
+board with a debug probe the tool also speaks SWD through openocd and
+reads the board's console over USB CDC.  Everything else on the hub is a
+load it can switch and nothing more.
 
 ```text
                 host owning the hub
                          │
          ┌───────────────┴───────────────┐
          │                               │
-  FT232 control line        USB data: the SWD probe
-  9600 8N1, internal        and the CDC console
-  to the hub
+  the control path:         USB data: the SWD probe
+  an FT232 line inside      and the CDC console
+  the hub, or the bus itself
          │                               │
          ▾                               ▾
 ┌───────────────────────────────────────────────┐
-│         ExSYS 16-port managed USB hub         │
-│        VBUS switched per port, 1 to 16        │
+│     ExSYS 16-port managed hub, or any hub     │
+│      that switches its own ports, 1 to N      │
 └───┬───────┬───────┬───────┬─────────┬─────────┘
     │       │       │       │         │
     ▾       ▾       ▾       ▾         ▾
@@ -47,7 +50,8 @@ recipes and traps — is the man page.  This file is the short way in.
 ## Requirements
 
 `tribble-control` runs on the machine owning the hub, not on a
-workstation: it needs a local FT232 to reach the hub, and a local
+workstation: it reaches the hub over something plugged into that
+machine — an FT232 line, or the USB bus itself — and needs a local
 openocd to reach a board.
 
   * **Ruby 3.1** or later.
@@ -65,6 +69,14 @@ openocd to reach a board.
     thing FreeBSD cannot do is see a device that no driver claimed,
     there being no node for it at all.  A probe that enumerates and
     attaches nothing is invisible there rather than serial-less.
+  * **For `hub = usb`: FreeBSD, and membership of group `operator`.**
+    That hub is switched with `usbconfig` hub-class requests, which is
+    FreeBSD's command — Linux has none that issues an arbitrary control
+    request to a hub — so the backend refuses to open on any other host.
+    Root is not required: the ugen nodes are `root:operator` 0660, and
+    the kernel demands the driver privilege only for SET_ADDRESS,
+    SET_CONFIG and SET_INTERFACE, so a hub-class port feature request
+    passes.  `pw groupmod operator -m <user>`, then log in again.
 
 
 ## Installing it
@@ -106,7 +118,11 @@ anything is switched rather than a bench in the wrong state — but the
 command does not run, so upgrade in that order.
 
 ```text
-# Which hub these ports are on: its FT232's serial number.
+# Which kind of hub, and which one.  'exsys' is the default: an ExSYS
+# hub, named by its FT232's serial number.  'usb' is any hub with
+# per-port power switching, named by its own serial, and only that kind
+# takes a 'switch' line.
+hub    = exsys
 device = AL03GD7X
 
 # Ports that must never be powered down.
@@ -149,9 +165,19 @@ powered board with `tribble-control serial <name>` and paste it whole:
 
 ## Which hub
 
-A host with one hub needs to be told nothing: the tool looks for the
-FTDI 0403:6001 that is a hub's control adapter and drives the one it
-finds.
+Two things to settle: which *kind* of hub, and which hub of that kind.
+
+The kind is `hub =` at the top of the devlist, or `--hub` on the command
+line: `exsys` (the default) or `usb`.  It names what the hub **is**, not
+which tool drives it on this host, so the same devlist line keeps
+working the day a Linux implementation lands.  It cannot be read off the
+`device =` value, either — a USB path such as `1-1.1` names an FT232's
+socket for an ExSYS hub and the hub itself for a usb hub — so it has to
+be said.
+
+An ExSYS hub on a host with one hub needs to be told nothing: the tool
+looks for the FTDI 0403:6001 that is a hub's control adapter and drives
+the one it finds.
 
 A host with two is two benches, and it refuses to guess — that FTDI id
 is every FT232 on the machine, so the first one enumerated is a coin
@@ -204,6 +230,89 @@ the socket is the fixed thing.  Both platforms report one, by different
 means: Linux states it in `/sys`, and on FreeBSD it is walked out of
 the sysctl tree.  The numbering is each host's own, so a path names a
 socket on the machine that reported it and does not travel.
+
+A `hub = usb` is named the same three ways, in its own shapes:
+
+| Written        | Means                       | Stays with  |
+| :------------- | :-------------------------- | :---------- |
+| `AC0528515619` | the hub's own serial number | the hub     |
+| `1-1.1`        | a USB path on this host     | the socket  |
+| ugen1.4        | that device, used as given  | nothing     |
+
+A ugen name is this kind's `/dev/ttyUSB1` and carries the same warning:
+the number is enumeration order — ugen1.4 is the fourth device the
+second controller attached — so a replug renumbers it, and a devlist
+naming a hub that way points at whatever attached in its place.  Keep it
+for the one-off; write the serial, or the path when the socket is the
+fixed thing.
+
+Auto-detection refuses the same way: one candidate is taken, two or more
+are listed and the command stops, each candidate with its serial, its
+ugen name, its USB path and its port count — the count being the only
+thing that tells two of the same part apart when neither has a serial.
+Root hubs are never candidates.  They are the controller a host's own
+sockets hang off, and a port of one has no `PORT_POWER` to clear, so
+offering one would offer a hub every command against it then failed on.
+
+The ports are the hub's own: 1 to the `bNbrPorts` its hub descriptor
+reports, read once when the hub is opened.  The fixed sixteen is the
+ExSYS hub's alone, and `undeclared = protect` earns its keep here — on a
+dock, one hub port feeds the next hub in the chain and another feeds the
+Ethernet adapter, and neither is a port to sweep off.
+
+
+## What "off" does
+
+The ExSYS hub cuts VBUS: `usb off` takes the power away from the socket
+and the board on it stops.  A standard hub may do that, or may only take
+the port off the bus, depending on whether a power switch is wired to
+the socket at all — and no software can tell the two apart, because a
+hub with none still reports the port unpowered and drops the link, so
+the device vanishes from the host and comes back either way.  The
+operator says which, with `switch =` at the top of a `hub = usb`
+devlist:
+
+| Written         | Means                                            |
+| :-------------- | :----------------------------------------------- |
+| `switch = link` | the default: `off` takes the port off the bus    |
+| `switch = vbus` | `off` cuts the socket's power                    |
+
+On an ExSYS hub the key is refused rather than ignored: that hub always
+cuts power, and a line that changes nothing is a line somebody will
+trust.
+
+Find out which yours is by watching a board's LED.  Put a board that
+lights up on a port, run `usb off` for that port, and look: an LED that
+goes out means `vbus`, an LED that stays lit while the board disappears
+from the host means `link`.  Test the socket you will actually use — the
+USB 2 and USB 3 sides of one socket are different ports on different
+hubs, and a hub may switch neither.
+
+Under `switch = link` everything that powers down still works.  `usb
+off`, `toggle` and `set` behave, the board vanishes from the host
+exactly as a power cut would, and `--method power` still identifies a
+board by being the only one openocd can see.  What does not happen is
+the board restarting.  So every power-down warns once, naming the ports
+that stay powered:
+
+```text
+ugen1.4 cuts the link, not the power: the board(s) on port(s) 1 2 stay
+powered (switch = link)
+```
+
+and the after-flash power cycle (`power_cycle = after-flash`, the
+DWM1001's trap) is skipped with a warning rather than pretended — a
+cycle that only re-enumerates the probe leaves the board in the very
+state the cycle exists to clear.
+
+After every switch the port's status is read back, and the command fails
+if the power bit did not follow.  That read-back is the tool's only
+measurement of whether a hub switches at all: a hub that accepts
+`CLEAR_FEATURE(PORT_POWER)`, answers OK and leaves the port up would
+otherwise have `usb off` report success on a bench it never touched.
+Nothing is refused on what a hub *declares* about its switching, for the
+same reason — the dock's Genesys hub declares ganged and switches per
+port anyway.
 
 
 ## Protected ports
@@ -314,8 +423,9 @@ it anywhere.
 ```sh
 rake            # everything that needs no hub, and the linter
 rake test       # the minitest suite: devlist, types, tallies, the
-                #   openocd command line, and the hub exchange itself
-                #   against a pty emulator
+                #   openocd command line, the ExSYS hub exchange against
+                #   a pty emulator and the usb one against a fake
+                #   usbconfig
 rake lint       # rubocop, gating at zero offences
 rake test:bench # the regression suite, which needs the bench
 ```

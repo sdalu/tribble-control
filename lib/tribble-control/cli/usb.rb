@@ -6,6 +6,11 @@ class CLI
 class USB < CLI::Command
     DESCRIPTION = 'USB hub control'
 
+    # What 'set' accepts on the right of the colon.  The hub does not
+    # see these words: they are read here into true and false.
+    ON_WORDS  = %w[1 on ON true TRUE t T].freeze
+    OFF_WORDS = %w[0 off OFF false FALSE f F].freeze
+
     Defaults = { :default => nil }
     Parser   = OptionParser.new do |opts|
         # Usage
@@ -31,7 +36,7 @@ class USB < CLI::Command
             # Read-only: asks the hub for its port mask and prints it
             # next to the devlist, so you can see what is on and what
             # tribble-control is allowed to switch before you switch it.
-            state = exsys.get(:ports)
+            state = hub.state
             named = devices.to_h {|n| [ port_list([ n ]).first, n ] }
             safe  = begin
                         switchable
@@ -45,51 +50,53 @@ safe.include?(port) ? '' : '(protected)')
         when 'on'
             # Powering up is always safe: no guard.
             ports = port_list(argv)
+            # Every port, named outright: an empty list never reaches
+            # the hub meaning "all".
             if ports.empty?
             then tty&.info "Turning on all ports"
-                 exsys.on(ExSYS::ManagedUSB::ALL)
+                 hub.on(*hub.ports)
             else tty&.info "Turning on ports: #{ports.join(' ')}"
-                 exsys.on(*ports)
+                 hub.on(*ports)
             end
         when 'off'
             ports = offable(port_list(argv), force: force)
             tty&.info "Turning off ports: #{ports.join(' ')}"
-            exsys.off(*ports)
+            hub.off(*ports)
+            warn_link_only(ports)
         when 'toggle'
             # Toggle can power a port down, so it is guarded like 'off'.
             ports = offable(port_list(argv), force: force)
             tty&.info "Toggling ports: #{ports.join(' ')}"
-            exsys.toggle(*ports)
+            hub.toggle(*ports)
+            warn_link_only(ports)
         when 'set'
-            tl = ExSYS::ManagedUSB::TRUE_LIST
-            fl = ExSYS::ManagedUSB::FALSE_LIST
-            t  = tl.to_h {|e| [ e.to_s, e ] }
-            f  = fl.to_h {|e| [ e.to_s, e ] }
-            tf = t.merge(f) { raise "true/false conflict (internal error)" }
-            r  = tf.keys.map {|e| Regexp.escape(e) }
+            words = (ON_WORDS + OFF_WORDS).map {|w| Regexp.escape(w) }
             a = argv.to_h {|e|
-                unless e =~ /^([^:]+):(#{r.join('|')})$/
+                unless e =~ /^([^:]+):(#{words.join('|')})$/
                     raise Error, "invalid argument (#{e})"
                 end
-                [ port_list([ $1 ]).first, tl.include?(tf[$2]) ? :on : :off ]
+                [ port_list([ $1 ]).first, ON_WORDS.include?($2) ]
             }
 
             # Vet the ports being powered down.
-            offable(a.select {|_,s| s == :off }.keys, force: force)
+            offable(a.reject {|_,on| on }.keys, force: force)
 
             # A false default would sweep every unnamed port off, the
             # reserved ones included.  Expand it over the switchable
             # ports instead, and leave the rest as they are.
             default = opts[:default]
             if (default == false) && !force
-                (switchable - a.keys).each {|p| a[p] = :off }
+                (switchable - a.keys).each {|p| a[p] = false }
                 default = nil
             end
 
             tty&.info "Applying port configuration:" \
-                      " #{a.map { _1.join(':') }.join(' ')}" \
+                      " #{a.map {|p, on| "#{p}:#{on ? 'on' : 'off'}" }.join(' ')}" \
                       " (default=#{default&.to_s || 'current'})"
-            exsys.set(a, default)
+            hub.set(a, default)
+            offs = a.reject {|_, on| on }.keys
+            offs = hub.ports - a.keys + offs if default == false
+            warn_link_only(offs.sort) unless offs.empty?
         when nil   then raise Error, 'usb: action missing'
         else            raise Error, "usb: unknown action (#{action})"
         end

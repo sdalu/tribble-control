@@ -258,11 +258,11 @@ class TestDevice < Minitest::Test
     # The hub's place in the tree comes from the candidate the gem
     # reported, not from the serial line.  The FT232 is wired at the
     # last position of the internal 4-by-4 tree, so its own path is
-    # <root>.4.4 and the root is that less two.
+    # <root>.4.4, the root is that less two, and port 1 is <root>.1.1.
     def test_the_hub_root_comes_from_the_candidate
         with_host do
             cli = cli_for("device = A50285BI\n#{DEVLIST}", device: nil)
-            assert_equal '1-1.2', cli.hub_usb_root
+            assert_equal '1-1.2.1.1', cli.hub.usb_path(1)
         end
     end
 
@@ -270,8 +270,8 @@ class TestDevice < Minitest::Test
     # knows it: -d is an escape hatch, not a reason to lose --method usb.
     def test_a_named_line_still_picks_up_its_usb_path
         with_host do
-            assert_equal '1-1.2',
-                         cli_for(DEVLIST, device: '/dev/ttyUSB0').hub_usb_root
+            assert_equal '1-1.2.1.1',
+                         cli_for(DEVLIST, device: '/dev/ttyUSB0').hub.usb_path(1)
         end
     end
 
@@ -279,7 +279,7 @@ class TestDevice < Minitest::Test
     # a guessed one.
     def test_a_line_discovery_does_not_know_has_no_root
         with_host do
-            assert_nil cli_for(DEVLIST, device: '/dev/pts/7').hub_usb_root
+            assert_nil cli_for(DEVLIST, device: '/dev/pts/7').hub.usb_path(1)
         end
     end
 
@@ -287,7 +287,7 @@ class TestDevice < Minitest::Test
     # walk that never reached a root hub) is the same case.
     def test_a_candidate_with_no_usb_path_has_no_root
         with_host([ HOST.first.merge(:usb_path => nil) ]) do
-            assert_nil cli_for(DEVLIST, device: nil).hub_usb_root
+            assert_nil cli_for(DEVLIST, device: nil).hub.usb_path(1)
         end
     end
 
@@ -295,32 +295,25 @@ class TestDevice < Minitest::Test
     # so there is no root to take two levels off.
     def test_an_adapter_too_shallow_to_be_in_a_hub_has_no_root
         with_host([ HOST.first.merge(:usb_path => '1-4') ]) do
-            assert_nil cli_for(DEVLIST, device: nil).hub_usb_root
+            assert_nil cli_for(DEVLIST, device: nil).hub.usb_path(1)
         end
     end
 
-    # The geometry, which belongs to the hub and not to either host.
+    # The geometry, which belongs to this hub and not to either host:
+    # four banks of four under the adapter's own root.
     def test_a_port_resolves_by_the_four_by_four_geometry
-        plat = TribbleControl::Platform
-        assert_equal '1-1.2.1.1', plat.port_to_usb(1,  root: '1-1.2')
-        assert_equal '1-1.2.2.1', plat.port_to_usb(5,  root: '1-1.2')
-        assert_equal '1-1.2.4.3', plat.port_to_usb(15, root: '1-1.2')
+        hub = TribbleControl::Hub::ExSYS.new(File::NULL, ctrl: HOST.first)
+        assert_equal '1-1.2.1.1', hub.usb_path(1)
+        assert_equal '1-1.2.2.1', hub.usb_path(5)
+        assert_equal '1-1.2.4.3', hub.usb_path(15)
     end
 
     # The documented trap: port 16 lands where the FT232 itself sits.
     def test_port_16_resolves_to_the_control_adapter
         with_host do
             cli = cli_for("device = A50285BI\n#{DEVLIST}", device: nil)
-            assert_equal HOST.first[:usb_path],
-                         TribbleControl::Platform.port_to_usb(
-                             16, root: cli.hub_usb_root)
+            assert_equal HOST.first[:usb_path], cli.hub.usb_path(16)
         end
-    end
-
-    def test_a_root_that_is_not_a_usb_path_is_refused
-        assert_raises(TribbleControl::CLI::Error) {
-            TribbleControl::Platform.port_to_usb(1, root: '/dev/ttyUSB0')
-        }
     end
 
     def test_no_candidate_at_all_says_so

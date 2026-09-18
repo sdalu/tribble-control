@@ -65,9 +65,19 @@ class Flash < CLI::Command
                 if ok && (opts[:'power-cycle'] ||
                           @cli.power_cycle?(name, 'after-flash'))
                     _, port = @cli.name_port(name)
-                    if offable?(port)
+                    if !hub.vbus?
+                        # Cutting the link would only re-enumerate the
+                        # probe; the board would keep the very state
+                        # the cycle exists to clear.  Skip it and say
+                        # so, in the same words as the protected case.
+                        tty&.warn "Device #{name}: NOT power-cycling," \
+                                  " #{hub} cuts the link, not the power" \
+                                  " (#{CLI::SWITCH_KEY} = link).  The board" \
+                                  ' may be in the state power_cycle' \
+                                  ' exists to avoid'
+                    elsif offable?(port)
                         tty&.info "Device #{name}: power-cycling after flash"
-                        exsys.off(port); sleep(2); exsys.on(port)
+                        hub.off(port); sleep(2); hub.on(port)
                     else
                         # Saying it plainly matters: a DWM1001 that misses
                         # its cycle comes out of the flash with a DW1000
