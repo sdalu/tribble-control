@@ -27,7 +27,7 @@ Command#run(argv, **opts)
       │
       ├──▸ each_device(ids) {|name, **hopts| ... }
       │       serial : all declared ports on; boards in parallel
-      │       usb    : all declared ports on; boards in sequence  (Linux)
+      │       usb    : all declared ports on; boards in sequence
       │       power  : one board powered at a time; bench left off
       │
       ├──▸ openocd(*cmds, **hopts)       flash, reset, connect --reset
@@ -222,6 +222,44 @@ the two readings look alike and are nonetheless not shared: one is
 about a bench's boards, the other about a product's control adapter,
 and the gem must work for callers that have no bench at all.
 
+### The floor is exsys 1.2
+
+The gemspec requires `exsys` as `~> 1.2`, and this tool is exactly the
+caller that floor is for.  Under 1.1, a FreeBSD control adapter whose
+tty was not named yet came back from `ExSYS::ManagedUSB.available` as
+`:device` `/dev/tty` — the string `/dev/tty` plus an empty ttyname —
+and `hub_device` takes a lone candidate without asking, so `usb off`
+on such a host would have opened the operator's own controlling
+terminal and written SP frames at it.  1.2 reports no candidate at all
+for an adapter whose tty is not named.
+
+Two more things come with that floor.  The gem's own walk up the
+sysctl tree is bounded, so a `%parent` chain that loops ends the walk
+rather than running forever; and only an `Exx` reply is read as a hub
+code, so a line that has gone silent no longer raises an `Error`
+carrying no message.  The second one matters here because `CLI.run`
+prints the message and nothing else: an error without one is the whole
+of what the operator is told, at the moment the line went quiet.
+
+The alternative was a guard here — `hub_device` refusing a candidate
+whose device is `/dev/tty` — and it was rejected.  That would paper
+over a gem defect inside one caller and leave every other caller of
+the gem exposed, and discovery is the gem's half of the split above.
+
+The requirement stays pessimistic on the series (`~> 1.2`, not
+`>= 1.2`) for the reason the `ucl` pin gives: the failure mode of a
+quiet semantic change in the hub layer is a port switched that should
+not be.
+
+The duplication above now runs to those guards as well, and stays
+duplicated.  `Platform`'s walk and the gem's discovery grew the same
+two independently: an entry with no ttyname, which `probe_consoles`
+drops, and a `%parent` chain that loops, which `usb_path` bounds with
+a seen-set.  That is the visible price of the split, and it was paid
+knowingly — the gem must work for callers with no bench, and
+`Platform`'s walk is about a bench's boards rather than about a
+product's control adapter.  Nothing merges them.
+
 
 ## each_device: the one path to a board
 
@@ -356,33 +394,41 @@ counts, which reads as a firmware saying nothing.
 
 ### A new host platform — a module under `Platform`
 
-A platform is a module under `Platform` holding four `def self.` methods.
+A platform is a module under `Platform` holding three `def self.` methods.
 `Platform::Current` is chosen by a `case` on `RbConfig::CONFIG['host_os']`
 at the foot of `platform.rb` — `/^linux-/` and `/^freebsd/` today, with
 anything else raising — and the module-level `def self.x(...) = Current.x(...)`
 forwarders below it are what the rest of the program calls.  Adding a
 platform is a module plus a branch in that `case`.
 
-| Method                     | Answers                 | Today |
-| :------------------------- | :---------------------- | :---- |
-| `probe_consoles`           | `{probe serial => tty}` | both  |
-| `port_to_usb(port, root:)` | hub port → USB path     | both  |
-| `usb_to_tty(path)`         | USB path → console tty  | both  |
-| `usb_to_serial(path)`      | USB path → probe serial | both  |
+| Method                | Answers                 | Today |
+| :-------------------- | :---------------------- | :---- |
+| `probe_consoles`      | `{probe serial => tty}` | both  |
+| `usb_to_tty(path)`    | USB path → console tty  | both  |
+| `usb_to_serial(path)` | USB path → probe serial | both  |
 
 Finding the *hub* is not among them: that is
 `ExSYS::ManagedUSB.available`, in the exsys gem.  What is here is
 finding the *boards*.
 
-The last three are about USB topology, and the two platforms differ in
+`port_to_usb(port, root:)` is not among them either, for a different
+reason: it is defined once at `Platform` level rather than per host, and
+it walks nothing.  What is left in it is the hub's geometry — four
+internal banks of four, so a board on a port is at `root.bank.slot` —
+and geometry belongs to the hub, not to the host.  The `root` comes in
+from `CLI#hub_usb_root`, which works it out from the USB path the gem
+reports for the control adapter.  A new platform module neither defines
+it nor needs to.
+
+The last two are about USB topology, and the two platforms differ in
 where that comes from.  Linux states it: `/sys/bus/usb` has a directory
 per device named by its path.  FreeBSD states nothing of the kind, so
-`port_to_usb` and the two lookups walk it out of the sysctl tree —
-`%location` gives the port a device occupies on its parent, `%parent`
-names that parent, and the walk ends at a root hub, whose `%location`
-is empty.  A walk that does not *reach* a root answers nil rather than
-what it collected: stopping one hub short turns `1-1.2.4.4` into `1-4`,
-which is not a broken string but a different socket.
+the two lookups walk it out of the sysctl tree — `%location` gives the
+port a device occupies on its parent, `%parent` names that parent, and
+the walk ends at a root hub, whose `%location` is empty.  A walk that
+does not *reach* a root answers nil rather than what it collected:
+stopping one hub short turns `1-1.2.4.4` into `1-4`, which is not a
+broken string but a different socket.
 
 The one asymmetry left is that FreeBSD cannot see a device no driver
 claimed — there is no `dev.ugen` — so such a device has no node, no
@@ -393,17 +439,17 @@ serial-less.  `Platform.serial_to_tty` is built
 on `probe_consoles` alone, needs no USB topology, and is therefore what
 lets a host without `/sys` reach a console at all.
 
-Two conventions for a platform that cannot implement all four — both
+Two conventions for a platform that cannot implement all three — both
 platforms do today, and FreeBSD did not until its topology was walked
 rather than read, so a third is likely to arrive short again:
 
   * **Stub, do not omit.**  An undefined method arrives as
-    `undefined method 'port_to_usb' for module ...`, which names an
+    `undefined method 'usb_to_tty' for module ...`, which names an
     internal and tells the reader nothing.  Raise a `CLI::Error` that
     says which piece is missing and which commands still work.  Each
-    of the three topology methods has a second route to the same board
+    of the two topology methods has a second route to the same board
     — `serial` addresses a probe by its serial and `power` by being
-    the only one on — so a platform missing all three still runs every
+    the only one on — so a platform missing both still runs every
     command.
   * **Use `private_class_method def self.…`** for helpers.  A bare
     `private` does nothing to a `def self.` singleton method, and a

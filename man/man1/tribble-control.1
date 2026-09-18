@@ -617,8 +617,8 @@ There are three ways, chosen with \-m/\-\-method:
 │ serial  │ its debug probe │ serial= for  │ every declared port    │
 │         │ serial number   │ every board  │ on; boards in parallel │
 ├─────────┼─────────────────┼──────────────┼────────────────────────┤
-│ usb     │ its USB path,   │ Linux (not   │ every declared port    │
-│         │ root.bank.slot  │ FreeBSD)     │ on; boards in sequence │
+│ usb     │ its USB path,   │ a USB path   │ every declared port    │
+│         │ root.bank.slot  │ for the hub  │ on; boards in sequence │
 ├─────────┼─────────────────┼──────────────┼────────────────────────┤
 │ power   │ being the only  │ nothing      │ exactly one board at   │
 │         │ board powered   │              │ a time, rest cut       │
@@ -1068,7 +1068,7 @@ It costs a cycle of the whole bench and leaves it powered off \(em run
 .Ic usb on
 afterwards \(em which is why
 .Cm usb
-remains the default on a host that can use it.
+remains the default wherever the hub's USB path is known.
 .Pp
 A probe on a port the devlist protects stays powered through all of
 that, so it is enumerated alongside the board being asked.
