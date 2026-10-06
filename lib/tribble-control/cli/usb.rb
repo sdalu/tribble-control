@@ -34,7 +34,7 @@ class USB < CLI::Command
         case action = argv.shift
         when 'status'
             # Read-only: asks the hub for its port mask and prints it
-            # next to the devlist, so you can see what is on and what
+            # next to the configuration, so you can see what is on and what
             # tribble-control is allowed to switch before you switch it.
             state = hub.state
             named = devices.to_h {|n| [ port_list([ n ]).first, n ] }

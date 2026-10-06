@@ -6,61 +6,61 @@ require_relative 'helper'
 require_relative 'support/fake_usbconfig'
 require_relative '../lib/tribble-control/hub/usb'
 
-# Which KIND of hub a devlist describes, and the settings that go with
+# Which KIND of hub a configuration describes, and the settings that go with
 # each kind.
 #
 # 'hub =' picks the backend and 'switch =' says what a usb hub's
 # switch does; -p is the ExSYS hub's password.  What is asserted here
 # is that a setting for the wrong kind is refused at load rather than
 # dropped -- a line that changes nothing is a line somebody will trust
-# -- and that the default is the ExSYS hub, so every devlist written
+# -- and that the default is the ExSYS hub, so every configuration written
 # before the key existed still means what it meant.
 class TestHubKind < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
-    DEVLIST = "A1 { port = 1 }\n"
+    CONFIG = "A1 { port = 1 }\n"
 
     def test_the_default_kind_is_the_exsys_hub
-        cli = cli_for(DEVLIST)
+        cli = cli_for(CONFIG)
         assert_instance_of TribbleControl::Hub::ExSYS, cli.hub
     end
 
-    def test_the_devlist_may_say_exsys_outright
-        cli = cli_for("hub = exsys\n#{DEVLIST}")
+    def test_the_config_may_say_exsys_outright
+        cli = cli_for("hub = exsys\n#{CONFIG}")
         assert_instance_of TribbleControl::Hub::ExSYS, cli.hub
     end
 
     def test_an_unknown_kind_is_refused_at_load
         assert_match(/hub must be one of exsys, usb/,
-                     refusal_for("hub = fnord\n#{DEVLIST}"))
+                     refusal_for("hub = fnord\n#{CONFIG}"))
     end
 
     def test_an_unknown_switch_is_refused_at_load
         assert_match(/switch must be one of link, vbus/,
-                     refusal_for("switch = maybe\n#{DEVLIST}"))
+                     refusal_for("switch = maybe\n#{CONFIG}"))
     end
 
     # The ExSYS hub always cuts power, so a switch line on it would be
     # a line that changes nothing.
     def test_a_switch_on_the_exsys_hub_is_refused_not_ignored
         assert_match(/switch = vbus applies to hub = usb/,
-                     refusal_for("switch = vbus\n#{DEVLIST}"))
+                     refusal_for("switch = vbus\n#{CONFIG}"))
     end
 
     def test_a_password_on_a_usb_hub_is_refused
         assert_match(/a usb hub has no password/,
-                     refusal_for("hub = usb\n#{DEVLIST}", '-p', 'secret'))
+                     refusal_for("hub = usb\n#{CONFIG}", '-p', 'secret'))
     end
 
-    def test_the_option_overrides_the_devlist
+    def test_the_option_overrides_the_config
         assert_match(/a usb hub has no password/,
-                     refusal_for("hub = exsys\n#{DEVLIST}",
+                     refusal_for("hub = exsys\n#{CONFIG}",
                                  '--hub', 'usb', '-p', 'secret'))
     end
 
     def test_the_option_takes_only_known_kinds
         assert_raises(OptionParser::InvalidArgument) {
-            cli_for(DEVLIST, '--hub', 'fnord')
+            cli_for(CONFIG, '--hub', 'fnord')
         }
     end
 
@@ -83,7 +83,7 @@ class TestHubKind < Minitest::Test
         USB.stub(:freebsd?, true) { USB.stub(:runner, -> { fake }, &) }
     end
 
-    def test_a_usb_hub_is_reached_through_the_devlist
+    def test_a_usb_hub_is_reached_through_the_config
         fake = FakeUsbconfig.new(USB_HOST.map(&:dup))
         on_usb_host(fake) do
             cli = cli_for("hub = usb\ndevice = 'AC0528515619'\nA1 { port = 2 }\n",
@@ -109,7 +109,7 @@ class TestHubKind < Minitest::Test
         end
     end
 
-    def test_a_usb_hub_port_out_of_range_is_refused_by_the_devlist_check
+    def test_a_usb_hub_port_out_of_range_is_refused_by_the_config_check
         fake = FakeUsbconfig.new(USB_HOST.map(&:dup))
         on_usb_host(fake) do
             cli = cli_for("hub = usb\ndevice = 'AC0528515619'\nA1 { port = 7 }\n",

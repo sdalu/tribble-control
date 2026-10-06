@@ -43,7 +43,7 @@ end
 
 # Two suites, and `rake test` is the one that runs anywhere.
 #
-# The minitest half needs no hub: the devlist layer, types, tallies and
+# The minitest half needs no hub: the configuration layer, types, tallies and
 # the openocd command line are all decided before hardware is touched,
 # and the hub exchange itself is tested against a pty emulator
 # speaking the real frames. The shell half drives a DEPLOYED copy over

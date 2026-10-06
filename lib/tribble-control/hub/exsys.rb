@@ -49,7 +49,7 @@ class ExSYS < Hub
     # first, and it is reused -- unplug the adapter holding ttyUSB0 and
     # the next thing to attach becomes ttyUSB0.  Two hubs can therefore
     # swap names across a reboot, or while the machine is up, and every
-    # devlist naming them that way is then pointed at the other bench.
+    # configuration naming them that way is then pointed at the other bench.
     #
     # The other two are both stable, and they answer different
     # questions.  A serial stays with the ADAPTER: move the hub to
@@ -133,13 +133,13 @@ class ExSYS < Hub
             raise Error, 'unable to auto-detect the hub control line:' \
                          " no FTDI #{CTRL_ID} on this host.  Name it" \
                          " with -d, or with a 'device =' line in the" \
-                         ' devlist'
+                         ' configuration'
         else
             raise Error, 'unable to auto-detect the hub control line:' \
                          " #{found.size} FTDI #{CTRL_ID} adapters on this" \
                          " host (#{seen(found)}).  Name the one to drive" \
                          " with -d, or with a 'device =' line in the" \
-                         ' devlist'
+                         ' configuration'
         end
     end
 
@@ -165,7 +165,7 @@ class ExSYS < Hub
     # One candidate, as an error message names it.
     #
     # The serial leads, that being what the reader is meant to copy
-    # into a devlist, and the USB path follows it in brackets where the
+    # into a configuration, and the USB path follows it in brackets where the
     # host reports one -- for the adapter with no serial it is the only
     # stable name there is, and a refusal is where somebody goes
     # looking for it.

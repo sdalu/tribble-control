@@ -4,7 +4,7 @@ require_relative 'helper'
 
 # The seam where firmware knowledge goes, and stays out of the tool.
 class TestTally < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
     def teardown
         TribbleControl::Tally.instance_variable_get(:@registry).delete('probe')
@@ -44,7 +44,7 @@ class TestTally < Minitest::Test
         assert_raises(ArgumentError) { TribbleControl::Tally.register(:probe) }
     end
 
-    def test_the_devlist_chooses_it_per_bench_and_per_board
+    def test_the_config_chooses_it_per_bench_and_per_board
         cli = cli_for("tally = none\nA1 { port = 1 }\nA2 { port = 2, tally = lines }")
         assert_equal 'none',  cli.tally('A1')
         assert_equal 'lines', cli.tally('A2')

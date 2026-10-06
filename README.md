@@ -33,17 +33,17 @@ load it can switch and nothing more.
                                  only powers
 ```
 
-A file you write — the **device list** — says which board sits on which
+A file you write — the **configuration** — says which board sits on which
 port, how to reach it, and which ports must never lose power.  The tool
 switches the bench it is told about and nothing else.
 
 ```sh
-tribble-control -D devlist.conf usb status
-tribble-control -D devlist.conf flash zephyr.hex alpha beta
-tribble-control -D devlist.conf connect --off gamma | tee run.log
+tribble-control -C tribble.conf usb status
+tribble-control -C tribble.conf flash zephyr.hex alpha beta
+tribble-control -C tribble.conf connect --off gamma | tee run.log
 ```
 
-The full manual — every option, every devlist key, the hub protocol,
+The full manual — every option, every configuration key, the hub protocol,
 recipes and traps — is the man page.  This file is the short way in.
 
 
@@ -102,20 +102,23 @@ The binstub sets that bundle up before loading anything, so it is what
 such a host should call.
 
 
-## The device list
+## The configuration
 
-Nearly every command needs one, given with `-D`/`--devlist`.  It
-describes a setup rather than the tool, so it lives with whatever owns
-the setup; `examples/devlist.conf` is a commented file to start from.
-Deploy the two together — they are read together, and a hub with one of
-them fresh and the other stale switches the wrong ports.
+Nearly every command needs one, given with `-C`/`--config`.  Without
+it, a file named `tribble-control.conf` in the current directory is
+used if there is one; neither the home directory nor `/etc` is ever
+consulted, and giving `-C` turns that lookup off.  It describes a setup
+rather than the tool, so it lives with whatever owns the setup;
+`examples/tribble.conf` is a commented file to start from.  Deploy the
+two together — they are read together, and a hub with one of them
+fresh and the other stale switches the wrong ports.
 
 If the two must move separately, move the **tool first**.  Every
 top-level key this tool does not know is taken for a board, and a board
-must declare a port, so a devlist carrying a newer key meets an older
-tool as `devlist entry 'device' has no port`.  That is a refusal before
-anything is switched rather than a bench in the wrong state — but the
-command does not run, so upgrade in that order.
+must declare a port, so a configuration carrying a newer key meets an
+older tool as `devlist entry 'device' has no port`.  That is a refusal
+before anything is switched rather than a bench in the wrong state —
+but the command does not run, so upgrade in that order.
 
 ```text
 # Which kind of hub, and which one.  'exsys' is the default: an ExSYS
@@ -177,10 +180,11 @@ powered board with `tribble-control serial <name>` and paste it whole:
 
 Two things to settle: which *kind* of hub, and which hub of that kind.
 
-The kind is `hub =` at the top of the devlist, or `--hub` on the command
-line: `exsys` (the default) or `usb`.  It names what the hub **is**, not
-which tool drives it on this host, so the same devlist line keeps
-working the day a Linux implementation lands.  It cannot be read off the
+The kind is `hub =` at the top of the configuration, or `--hub` on the
+command line: `exsys` (the default) or `usb`.  It names what the hub
+**is**, not which tool drives it on this host, so the same
+configuration line keeps working the day a Linux implementation lands.
+It cannot be read off the
 `device =` value, either — a USB path such as `1-1.1` names an FT232's
 socket for an ExSYS hub and the hub itself for a usb hub — so it has to
 be said.
@@ -200,7 +204,7 @@ serials:
 tribble-control: unable to auto-detect the hub control line: 2 FTDI
 0403:6001 adapters on this host (found: A50285BI on /dev/ttyUSB0,
 AL03GD7X on /dev/ttyUSB1).  Name the one to drive with -d, or with a
-'device =' line in the devlist.
+'device =' line in the configuration.
 ```
 
 `exsys-usb discover`, from the exsys gem, lists them the same way
@@ -211,9 +215,9 @@ without switching anything:
 /dev/ttyUSB1 AL03GD7X 1-1.3.4.4
 ```
 
-Put that serial in the devlist, as `device =` at the top, and `-D`
-alone selects a bench — which is already the thing every command has
-to say.  `-d` overrides it for the one-off.
+Put that serial in the configuration, as `device =` at the top, and
+`-C` alone selects a bench — which is already the thing every command
+has to say.  `-d` overrides it for the one-off.
 
 Either takes three shapes, told apart by what they look like:
 
@@ -251,8 +255,9 @@ A `hub = usb` is named the same three ways, in its own shapes:
 
 A ugen name is this kind's `/dev/ttyUSB1` and carries the same warning:
 the number is enumeration order — ugen1.4 is the fourth device the
-second controller attached — so a replug renumbers it, and a devlist
-naming a hub that way points at whatever attached in its place.  Keep it
+second controller attached — so a replug renumbers it, and a
+configuration naming a hub that way points at whatever attached in its
+place.  Keep it
 for the one-off; write the serial, or the path when the socket is the
 fixed thing.
 
@@ -280,7 +285,7 @@ the socket at all — and no software can tell the two apart, because a
 hub with none still reports the port unpowered and drops the link, so
 the device vanishes from the host and comes back either way.  The
 operator says which, with `switch =` at the top of a `hub = usb`
-devlist:
+configuration:
 
 | Written         | Means                                            |
 | :-------------- | :----------------------------------------------- |
@@ -335,23 +340,23 @@ A hub port carries whatever is plugged into it, and cutting VBUS on a
 single-board computer reboots it mid-write.  So powering a port *down*
 is guarded, and powering one *up* is not:
 
-  * Ports the devlist does not mention are protected.  `protect {
+  * Ports the configuration does not mention are protected.  `protect {
     undeclared = no }` lifts that for the unmentioned ones.
   * Ports `protect` names are protected whichever mode is in force —
-    `ports` for a number, `nodes` for the name of a devlist entry,
+    `ports` for a number, `nodes` for the name of a configuration entry,
     which protects whichever port that entry says the board is on.
-  * `-F`/`--force` lifts both.  Without a devlist at all,
+  * `-F`/`--force` lifts both.  Without a configuration at all,
     `tribble-control` refuses to power anything down.
 
 The two keys this replaced — `reserved`, and `undeclared` at the top of
 the file — are refused by name, each with the line to write instead.  A
-devlist written for 0.2.0 or earlier does not load and does not switch
-anything until its protection is rewritten as the block above.
+configuration written for 0.2.0 or earlier does not load and does not
+switch anything until its protection is rewritten as the block above.
 
-`usb status` prints the hub's own view next to the devlist's, so you
-can see what is on and what may be switched before switching it.  The
-protection is only ever as current as the file: a stale devlist guards
-the ports it used to know about.
+`usb status` prints the hub's own view next to the configuration's, so
+you can see what is on and what may be switched before switching it.
+The protection is only ever as current as the file: a stale
+configuration guards the ports it used to know about.
 
 
 ## Commands
@@ -396,9 +401,9 @@ aborts if one is missing.
 `power` is the fallback that needs no configuration: it identifies a
 board by being the only one powered.  It costs a power cycle per board
 and **leaves the bench powered off** when it finishes — every declared
-board whose port may be switched, that is; one the devlist protects
-stays powered and says so.  Run `usb on` afterwards to bring the bench
-back up.
+board whose port may be switched, that is; one the configuration
+protects stays powered and says so.  Run `usb on` afterwards to bring
+the bench back up.
 
 
 ## Reading a console
@@ -413,7 +418,7 @@ line.
 Two tallies ship: `lines` counts lines, and `none` writes no summary at
 all.  Anything that knows a firmware's strings is a block registered by
 a Ruby file named with `-r`/`--require` and chosen with `tally =` in
-the devlist, for the whole bench or for one board.  See DESIGN.md and
+the configuration, for the whole bench or for one board.  See DESIGN.md and
 the manual's TALLIES section.
 
 
@@ -443,7 +448,7 @@ it anywhere.
 
 ```sh
 rake            # everything that needs no hub, and the linter
-rake test       # the minitest suite: devlist, types, tallies, the
+rake test       # the minitest suite: configuration, types, tallies, the
                 #   openocd command line, the ExSYS hub exchange against
                 #   a pty emulator and the usb one against a fake
                 #   usbconfig
@@ -470,7 +475,7 @@ boards they name up, which is the benign direction.
 The second argument points the suite at a different copy of the tool —
 a deliberately broken one, say, since a test that has never been seen
 to fail is not evidence.  The third names the tally, which any command
-that opens a console needs when the devlist asks for one by name.
+that opens a console needs when the configuration asks for one by name.
 
 
 ## Hacking on it
@@ -492,7 +497,7 @@ them][kirk].
 A bench fills up the same way.  One board becomes three, three become
 eleven, they are identical, every one of them wants power, and not one
 of them will tell you which socket it is sitting in.  That last part is
-what the device list is for.
+what the configuration is for.
 
 ![Tribble props from the Star Trek exhibit at the Henry Ford Museum][photo]
 

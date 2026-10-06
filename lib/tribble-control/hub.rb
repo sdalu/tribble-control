@@ -36,8 +36,8 @@ class Hub
     class Error < StandardError
     end
 
-    # The kinds of hub there are, by the name a devlist's 'hub =' line
-    # uses, and the class answering for each.  The devlist says what
+    # The kinds of hub there are, by the name a configuration's 'hub =' line
+    # uses, and the class answering for each.  The configuration says what
     # the hub IS -- an ExSYS managed hub, a standard hub with per-port
     # power switching -- and not which tool drives it on this host, so
     # the same line keeps working when another host learns to drive
@@ -56,7 +56,7 @@ class Hub
     end
 
     # Every port this hub has, in order.  Static, and asked before the
-    # hub is ever opened: the devlist is checked against it.
+    # hub is ever opened: the configuration is checked against it.
     def ports = raise NotImplementedError, "#{self.class}#ports"
 
     # The hub's own view of what is powered: { port => true/false },

@@ -10,7 +10,7 @@ class Connect < CLI::Command
 
     # usb first, so it stays the default where it works.  serial is
     # what reaches a console on a host with no /sys/bus/usb: it needs
-    # no topology, only the probe serial the devlist already carries
+    # no topology, only the probe serial the configuration already carries
     # to address the board for flashing.
     Methods  = [ 'usb', 'serial' ]
     Defaults = {}
@@ -86,7 +86,7 @@ class Connect < CLI::Command
             # What the lines MEAN is not this tool's business: the
             # strings worth counting belong to whatever firmware
             # happens to be on the bench this month, and they change
-            # without a hub changing.  The tally named by the devlist
+            # without a hub changing.  The tally named by the configuration
             # is handed every line and asked, at the end, for one
             # summary.  See TribbleControl::Tally, and --require.
             counter = Tally.build(tally(name), name)

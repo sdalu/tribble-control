@@ -7,8 +7,8 @@
 #
 # Everything between the script's own flags and the last argument is
 # handed to tribble-control unchanged, so name the hub the way you
-# would for any command: -D devlist.conf, or --hub usb -d SERIAL -F.
-# Without a devlist tribble-control refuses to power anything down,
+# would for any command: -C tribble.conf, or --hub usb -d SERIAL -F.
+# Without a configuration tribble-control refuses to power anything down,
 # which is what -F is for here.
 #
 #   -n           dry run: print what would be switched, switch nothing
@@ -131,9 +131,9 @@ while :; do
     printf 'Did the LED go out while the port was off? [y/n] ' >&2
     IFS= read -r answer < /dev/tty || die 'no answer'
     case $answer in
-    [Yy]*) printf 'Write this at the top of the devlist:\n' >&2
+    [Yy]*) printf 'Write this at the top of the configuration:\n' >&2
            printf '%s\n' 'switch = vbus'; break ;;
-    [Nn]*) printf 'Write this at the top of the devlist, or leave it out (it is the default):\n' >&2
+    [Nn]*) printf 'Write this at the top of the configuration, or leave it out (it is the default):\n' >&2
            printf '%s\n' 'switch = link'; break ;;
     *)     warn 'y or n' ;;
     esac

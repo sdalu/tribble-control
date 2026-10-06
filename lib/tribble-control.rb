@@ -2,11 +2,11 @@
 # tribble-control -- power, flash and monitor the devices plugged into an
 # ExSYS 16-port managed USB hub.
 #
-#     tribble-control -D devlist.conf flash zephyr.hex A1 A3
-#     tribble-control -D devlist.conf connect --off C2 B2 | tee twr.log
+#     tribble-control -C tribble.conf flash zephyr.hex A1 A3
+#     tribble-control -C tribble.conf connect --off C2 B2 | tee twr.log
 #
 # A hub port may feed something that must never lose power, so
-# tribble-control refuses to switch off any port the devlist does not
+# tribble-control refuses to switch off any port the configuration does not
 # declare, and any port its 'protect' block names; -F/--force lifts
 # both rules.
 #

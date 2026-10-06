@@ -24,7 +24,7 @@ module TribbleControl
 #         MyTally.new(device)
 #     end
 #
-# and chosen with `tally = twr` in the devlist, for the whole bench or
+# and chosen with `tally = twr` in the configuration, for the whole bench or
 # for one board.  The block is called once per board per run, so a
 # tally may keep whatever state it likes without sharing it.
 class Tally
@@ -45,7 +45,7 @@ class Tally
         # Build the tally called +name+ for the device +device+.
         #
         # An unknown name is an error rather than a silent fallback to
-        # counting lines: a devlist asking for 'twr' on a run that
+        # counting lines: a configuration asking for 'twr' on a run that
         # forgot -r would otherwise capture a whole bench and report
         # nothing but line counts, which reads as a firmware saying
         # nothing rather than as a missing file.

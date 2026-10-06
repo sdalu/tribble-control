@@ -48,7 +48,7 @@ module FreeBSD
 
     # Every debug probe's console, keyed by the probe's serial.
     #
-    # The probe reports its own serial, the devlist already carries
+    # The probe reports its own serial, the configuration already carries
     # that serial to address the board for flashing, and umodem says
     # which tty the probe's CDC interface became.  No topology at all,
     # which is what lets `connect --method serial` work anywhere.

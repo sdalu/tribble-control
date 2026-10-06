@@ -9,7 +9,7 @@ require_relative 'helper'
 # the board kept its power, and the one step that is skipped because
 # it would achieve nothing: the after-flash power cycle.
 class TestSwitch < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
     # Four ports, every switch recorded, and a switch that cuts the
     # link only.
@@ -29,13 +29,13 @@ class TestSwitch < Minitest::Test
         def to_s  = 'ugen9.9'
     end
 
-    DEVLIST = "A1 { port = 1, serial = 'abc' }\nA2 { port = 2 }\n"
+    CONFIG = "A1 { port = 1, serial = 'abc' }\nA2 { port = 2 }\n"
 
     # The CLI parses against a pty-less ExSYS line and is then handed
-    # the link-only hub, which is what a devlist saying hub = usb,
+    # the link-only hub, which is what a configuration saying hub = usb,
     # switch = link would have given it.
     def cli_with_link_hub(*argv, **kws)
-        cli_for(DEVLIST, *argv, **kws).tap {|cli|
+        cli_for(CONFIG, *argv, **kws).tap {|cli|
             cli.instance_variable_set(:@hub, LinkHub.new)
         }
     end
@@ -72,7 +72,7 @@ class TestSwitch < Minitest::Test
     # The ExSYS hub cuts power, so nothing is said.
     def test_a_hub_that_cuts_power_says_nothing_extra
         hub = FakeHub.new(state: 0b1111)
-        cli = cli_for(DEVLIST, device: hub.path)
+        cli = cli_for(CONFIG, device: hub.path)
         TribbleControl::CLI::USB.new(cli).run([ 'off', '1' ], force: false)
         refute_match(/cuts the link/, log_of(cli))
     ensure

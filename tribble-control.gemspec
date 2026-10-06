@@ -81,11 +81,12 @@ Gem::Specification.new do |spec|
     # install on the bench, and no mini_portile2 either, which 0.1.4
     # needed.  It also carries the use-after-free and parser-leak fixes.
     #
-    # Pinned to the 0.2 series rather than '>= 0.2': the devlist layer
-    # depends on load_file handing back string keys, and a key-handling
-    # default that changed under a pre-1.0 minor bump would not fail --
-    # it would quietly stop finding 'port' on every entry.
-    spec.add_dependency 'ucl', '~> 0.2.0'   # the device list format
+    # Pinned to the 0.2 series rather than '>= 0.2': the configuration
+    # layer depends on load_file handing back string keys, and a
+    # key-handling default that changed under a pre-1.0 minor bump
+    # would not fail -- it would quietly stop finding 'port' on every
+    # entry.
+    spec.add_dependency 'ucl', '~> 0.2.0'   # the configuration format
 
     # Pinned to 5: minitest 6 moved minitest/mock out into a gem of its
     # own, which is a trap worth naming even though nothing here mocks.

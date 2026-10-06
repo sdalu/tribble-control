@@ -4,7 +4,7 @@ require_relative 'helper'
 
 # Which hub the tool drives.
 #
-# Three answers, in the order parse trusts them: -d, the devlist's own
+# Three answers, in the order parse trusts them: -d, the configuration's own
 # 'device' line, and the host.  The last one is a guess, and the point
 # of these is that it is only made when there is nothing to guess
 # between -- a host with two hubs on it must be told which.
@@ -14,9 +14,9 @@ require_relative 'helper'
 # when none can be -- not the udevadm and sysctl reading behind it,
 # which the gem tests against captured output of its own.
 class TestDevice < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
-    DEVLIST = "A1 { port = 1 }\n"
+    CONFIG = "A1 { port = 1 }\n"
 
     # Two hubs and a USB-serial cable, in the order a host might well
     # enumerate them: the one wanted is not the first.  The third has
@@ -33,25 +33,25 @@ class TestDevice < Minitest::Test
     # tree.  Both platforms do report a path -- Linux states it, and
     # FreeBSD's is walked out of its sysctl tree -- but a walk that
     # cannot reach a root hub answers nil rather than guess, and a
-    # devlist naming a socket has then to be told so.
+    # configuration naming a socket has then to be told so.
     PATHLESS_HOST = HOST.map {|c| c.merge(:usb_path => nil) }.freeze
 
     def with_host(ctrls = HOST, &)
         ExSYS::ManagedUSB.stub(:available, ctrls, &)
     end
 
-    # The devlist names its hub, so -D alone selects a bench.
-    def test_the_devlist_names_the_hub_by_serial
+    # The configuration names its hub, so -D alone selects a bench.
+    def test_the_config_names_the_hub_by_serial
         with_host do
-            cli = cli_for("device = AL03GD7X\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = AL03GD7X\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB1', cli.device
         end
     end
 
     # The third form: the socket rather than the adapter.
-    def test_the_devlist_names_the_hub_by_usb_path
+    def test_the_config_names_the_hub_by_usb_path
         with_host do
-            cli = cli_for("device = 1-1.3.4.4\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = 1-1.3.4.4\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB1', cli.device
         end
     end
@@ -60,7 +60,7 @@ class TestDevice < Minitest::Test
     # named by, whose only other name is the one that moves.
     def test_a_hub_with_no_serial_is_reachable_by_path
         with_host do
-            cli = cli_for("device = 1-2\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = 1-2\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB2', cli.device
         end
     end
@@ -68,7 +68,7 @@ class TestDevice < Minitest::Test
     def test_the_command_line_takes_a_usb_path_too
         with_host do
             assert_equal '/dev/ttyUSB1',
-                         cli_for(DEVLIST, device: '1-1.3.4.4').device
+                         cli_for(CONFIG, device: '1-1.3.4.4').device
         end
     end
 
@@ -77,7 +77,7 @@ class TestDevice < Minitest::Test
     # and "not found" would send the reader hunting for one.
     def test_a_usb_path_on_a_host_that_reports_none_says_why
         with_host(PATHLESS_HOST) do
-            msg = refusal_for("device = 1-1.3.4.4\n#{DEVLIST}", device: nil)
+            msg = refusal_for("device = 1-1.3.4.4\n#{CONFIG}", device: nil)
             assert_match(/reports no USB path for any/, msg)
             assert_match(/Name the hub by the serial/,  msg)
             assert_match(/A50285BI/,                    msg)
@@ -87,7 +87,7 @@ class TestDevice < Minitest::Test
     def test_an_unknown_usb_path_says_path_not_serial
         with_host do
             assert_match(/no FTDI 0403:6001 at USB path '9-9'/,
-                         refusal_for("device = 9-9\n#{DEVLIST}", device: nil))
+                         refusal_for("device = 9-9\n#{CONFIG}", device: nil))
         end
     end
 
@@ -95,7 +95,7 @@ class TestDevice < Minitest::Test
     # the same rule --openocd uses to tell a path from a name to look
     # up, and the reason a bare name is not a path (see below).
     def test_a_path_is_taken_as_written
-        cli = cli_for("device = /dev/ttyUSB1\n#{DEVLIST}", device: nil)
+        cli = cli_for("device = /dev/ttyUSB1\n#{CONFIG}", device: nil)
         assert_equal '/dev/ttyUSB1', cli.device
     end
 
@@ -103,7 +103,7 @@ class TestDevice < Minitest::Test
     # is a path like any other: nothing here parses what is in it.
     def test_a_by_id_symlink_is_a_path
         line = '/dev/serial/by-id/usb-FTDI_FT232R_B0035JKX-if00-port0'
-        assert_equal line, cli_for(DEVLIST, device: line).device
+        assert_equal line, cli_for(CONFIG, device: line).device
     end
 
     # Anywhere, not just at the front: a relative path is still a
@@ -112,7 +112,7 @@ class TestDevice < Minitest::Test
     # socat pty in the working directory means.
     def test_a_relative_path_is_still_a_path
         with_host do
-            assert_equal './hub', cli_for(DEVLIST, device: './hub').device
+            assert_equal './hub', cli_for(CONFIG, device: './hub').device
         end
     end
 
@@ -121,13 +121,13 @@ class TestDevice < Minitest::Test
     def test_a_bare_name_is_a_serial_not_a_filename
         with_host do
             assert_match(/no FTDI 0403:6001 with serial 'hub'/,
-                         refusal_for(DEVLIST, device: 'hub'))
+                         refusal_for(CONFIG, device: 'hub'))
         end
     end
 
     # The one-off: a hub reached through some other node.
-    def test_the_command_line_wins_over_the_devlist
-        cli = cli_for("device = /dev/ttyUSB1\n#{DEVLIST}",
+    def test_the_command_line_wins_over_the_config
+        cli = cli_for("device = /dev/ttyUSB1\n#{CONFIG}",
                       device: '/dev/ttyUSB9')
         assert_equal '/dev/ttyUSB9', cli.device
     end
@@ -135,16 +135,16 @@ class TestDevice < Minitest::Test
     def test_the_command_line_takes_a_serial_too
         with_host do
             assert_equal '/dev/ttyUSB1',
-                         cli_for(DEVLIST, device: 'AL03GD7X').device
+                         cli_for(CONFIG, device: 'AL03GD7X').device
         end
     end
 
-    # A serial nothing on the host reports is a devlist deployed to the
+    # A serial nothing on the host reports is a configuration deployed to the
     # wrong machine, or a hub that is not plugged in.  Both are worth a
     # message listing what IS there.
     def test_an_unknown_serial_lists_what_the_host_has
         with_host do
-            msg = refusal_for("device = NOSUCH\n#{DEVLIST}", device: nil)
+            msg = refusal_for("device = NOSUCH\n#{CONFIG}", device: nil)
             assert_match(/no FTDI 0403:6001 with serial 'NOSUCH'/, msg)
             assert_match(%r{A50285BI on /dev/ttyUSB0},             msg)
             assert_match(%r{/dev/ttyUSB2, which reports no serial}, msg)
@@ -157,7 +157,7 @@ class TestDevice < Minitest::Test
     # 'device' is a setting, not a board: it must not turn into an
     # entry with no port, nor be selectable by name.
     def test_the_device_key_is_not_a_device
-        cli = cli_for("device = /dev/ttyUSB1\n#{DEVLIST}", device: nil)
+        cli = cli_for("device = /dev/ttyUSB1\n#{CONFIG}", device: nil)
         assert_equal [ 'A1' ], cli.declared
         assert_equal [ 'A1' ], cli.devices
     end
@@ -169,7 +169,7 @@ class TestDevice < Minitest::Test
     def test_an_unquoted_all_digit_serial_is_a_serial
         with_host([ { :device => '/dev/ttyUSB4', :serial => '12345678',
                       :usb_path => '1-4' } ]) do
-            cli = cli_for("device = 12345678\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = 12345678\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB4', cli.device
         end
     end
@@ -182,7 +182,7 @@ class TestDevice < Minitest::Test
     def test_a_leading_zero_serial_loses_its_zeros_and_says_so
         with_host([ { :device => '/dev/ttyUSB4', :serial => '00760040233',
                       :usb_path => '1-4' } ]) do
-            msg = refusal_for("device = 00760040233\n#{DEVLIST}", device: nil)
+            msg = refusal_for("device = 00760040233\n#{CONFIG}", device: nil)
             assert_match(/with serial '760040233'/, msg)
             assert_match(%r{00760040233 on /dev/ttyUSB4}, msg)
         end
@@ -191,14 +191,14 @@ class TestDevice < Minitest::Test
     def test_quoting_it_keeps_the_zeros
         with_host([ { :device => '/dev/ttyUSB4', :serial => '00760040233',
                       :usb_path => '1-4' } ]) do
-            cli = cli_for("device = '00760040233'\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = '00760040233'\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB4', cli.device
         end
     end
 
     def test_a_device_block_is_refused
         assert_match(/must name one hub/,
-                     refusal_for("device { line = /dev/ttyUSB1 }\n#{DEVLIST}",
+                     refusal_for("device { line = /dev/ttyUSB1 }\n#{CONFIG}",
                                  device: nil))
     end
 
@@ -206,7 +206,7 @@ class TestDevice < Minitest::Test
     # no ceremony.
     def test_one_candidate_is_taken
         with_host([ HOST.first ]) do
-            assert_equal '/dev/ttyUSB0', cli_for(DEVLIST, device: nil).device
+            assert_equal '/dev/ttyUSB0', cli_for(CONFIG, device: nil).device
         end
     end
 
@@ -214,7 +214,7 @@ class TestDevice < Minitest::Test
     # take whichever the host enumerated first and switch its ports.
     def test_several_candidates_are_refused_by_name
         with_host do
-            msg = refusal_for(DEVLIST, device: nil)
+            msg = refusal_for(CONFIG, device: nil)
             assert_match(/3 FTDI 0403:6001 adapters/, msg)
             assert_match(%r{A50285BI on /dev/ttyUSB0}, msg)
             assert_match(%r{AL03GD7X on /dev/ttyUSB1}, msg)
@@ -223,12 +223,12 @@ class TestDevice < Minitest::Test
         end
     end
 
-    # ... and the devlist's line settles it without -d, which is the
+    # ... and the configuration's line settles it without -d, which is the
     # whole point: the bench command says which device list, and that
     # is already the thing it has to say.
-    def test_the_devlist_settles_an_ambiguous_host
+    def test_the_config_settles_an_ambiguous_host
         with_host do
-            cli = cli_for("device = AL03GD7X\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = AL03GD7X\n#{CONFIG}", device: nil)
             assert_equal '/dev/ttyUSB1', cli.device
         end
     end
@@ -261,7 +261,7 @@ class TestDevice < Minitest::Test
     # <root>.4.4, the root is that less two, and port 1 is <root>.1.1.
     def test_the_hub_root_comes_from_the_candidate
         with_host do
-            cli = cli_for("device = A50285BI\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = A50285BI\n#{CONFIG}", device: nil)
             assert_equal '1-1.2.1.1', cli.hub.usb_path(1)
         end
     end
@@ -271,7 +271,7 @@ class TestDevice < Minitest::Test
     def test_a_named_line_still_picks_up_its_usb_path
         with_host do
             assert_equal '1-1.2.1.1',
-                         cli_for(DEVLIST, device: '/dev/ttyUSB0').hub.usb_path(1)
+                         cli_for(CONFIG, device: '/dev/ttyUSB0').hub.usb_path(1)
         end
     end
 
@@ -279,7 +279,7 @@ class TestDevice < Minitest::Test
     # a guessed one.
     def test_a_line_discovery_does_not_know_has_no_root
         with_host do
-            assert_nil cli_for(DEVLIST, device: '/dev/pts/7').hub.usb_path(1)
+            assert_nil cli_for(CONFIG, device: '/dev/pts/7').hub.usb_path(1)
         end
     end
 
@@ -287,7 +287,7 @@ class TestDevice < Minitest::Test
     # walk that never reached a root hub) is the same case.
     def test_a_candidate_with_no_usb_path_has_no_root
         with_host([ HOST.first.merge(:usb_path => nil) ]) do
-            assert_nil cli_for(DEVLIST, device: nil).hub.usb_path(1)
+            assert_nil cli_for(CONFIG, device: nil).hub.usb_path(1)
         end
     end
 
@@ -295,7 +295,7 @@ class TestDevice < Minitest::Test
     # so there is no root to take two levels off.
     def test_an_adapter_too_shallow_to_be_in_a_hub_has_no_root
         with_host([ HOST.first.merge(:usb_path => '1-4') ]) do
-            assert_nil cli_for(DEVLIST, device: nil).hub.usb_path(1)
+            assert_nil cli_for(CONFIG, device: nil).hub.usb_path(1)
         end
     end
 
@@ -311,7 +311,7 @@ class TestDevice < Minitest::Test
     # The documented trap: port 16 lands where the FT232 itself sits.
     def test_port_16_resolves_to_the_control_adapter
         with_host do
-            cli = cli_for("device = A50285BI\n#{DEVLIST}", device: nil)
+            cli = cli_for("device = A50285BI\n#{CONFIG}", device: nil)
             assert_equal HOST.first[:usb_path], cli.hub.usb_path(16)
         end
     end
@@ -319,7 +319,7 @@ class TestDevice < Minitest::Test
     def test_no_candidate_at_all_says_so
         with_host([]) do
             assert_match(/no FTDI 0403:6001 on this host/,
-                         refusal_for(DEVLIST, device: nil))
+                         refusal_for(CONFIG, device: nil))
         end
     end
 end

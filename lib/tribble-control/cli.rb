@@ -1,5 +1,5 @@
 #
-# The command line: global options, the device list, and the machinery
+# The command line: global options, the configuration, and the machinery
 # every command uses to reach a board (each_device, openocd).
 #
 require 'optparse'
@@ -47,7 +47,7 @@ class CLI
         end
     end
 
-    # devlist block gathering everything that keeps a port powered.
+    # configuration block gathering everything that keeps a port powered.
     #
     # Two rules, one key.  'undeclared' says whether a port the file
     # does not mention is protected -- yes, the default, is what keeps
@@ -55,7 +55,7 @@ class CLI
     # 'nodes' name the ones protected whichever way that falls, which
     # is how a port that IS declared is kept powered anyway.
     #
-    # 'ports' takes port numbers and 'nodes' the names of devlist
+    # 'ports' takes port numbers and 'nodes' the names of configuration
     # entries, which is the same protection said two ways.  A name is
     # the better one where there is an entry to name: it survives the
     # board moving socket, and it cannot go on protecting port 12 after
@@ -78,9 +78,9 @@ class CLI
 
     # What the block replaced, and how each is written now.
     #
-    # A devlist from before the change is met with its new spelling.
+    # A configuration from before the change is met with its new spelling.
     # Without this 'reserved' falls through to the device pass and is
-    # refused as "devlist entry 'reserved' has no port" -- true, and no
+    # refused as "configuration entry 'reserved' has no port" -- true, and no
     # help at all, since the port line it asks for would load the file
     # and leave every port it named switchable.
     PROTECT_FORMER = {
@@ -110,16 +110,16 @@ class CLI
     # every board of that kind is the same board.
     TYPE_FORBIDDEN = [ 'port', 'serial' ].freeze
 
-    # Top-of-file devlist key: the serial line of the hub this file
+    # Top-of-file configuration key: the serial line of the hub this file
     # describes.
     #
-    # A devlist is one bench, and a bench is one hub, so the file that
-    # says which board is on which port is the right place to say which
-    # hub those ports belong to.  Without it, a host with two hubs
-    # plugged in has to be told twice -- -d for the line, -D for the
-    # map -- and the two are then free to disagree: -D says bench two
+    # A configuration is one bench, and a bench is one hub, so the file
+    # that says which board is on which port is the right place to say
+    # which hub those ports belong to.  Without it, a host with two hubs
+    # plugged in has to be told twice -- -d for the line, -C for the
+    # map -- and the two are then free to disagree: -C says bench two
     # and -d, or the auto-detection, says the first FTDI adapter the
-    # host happens to enumerate.  With it, -D alone selects a bench.
+    # host happens to enumerate.  With it, -C alone selects a bench.
     #
     # -d still wins, for the one-off: a hub that has moved, or a line
     # reached through something other than the usual node.
@@ -130,7 +130,7 @@ class CLI
     # one.
     DEVICE_KEY     = 'device'
 
-    # Top-of-file devlist key: which KIND of hub the file describes.
+    # Top-of-file configuration key: which KIND of hub the file describes.
     #
     # 'exsys', the default, is the ExSYS managed hub over its FT232
     # line; 'usb' is a standard hub with per-port power switching,
@@ -141,7 +141,7 @@ class CLI
     HUB_KEY        = 'hub'
     HUB_DEFAULT    = 'exsys'
 
-    # Top-of-file devlist key, for hub = usb only: what that hub's
+    # Top-of-file configuration key, for hub = usb only: what that hub's
     # switch does.  'link', the default, takes the port off the bus and
     # leaves the board powered; 'vbus' cuts the socket's power.
     # Software cannot tell the two apart -- the device vanishes and
@@ -159,7 +159,7 @@ class CLI
     TALLY_KEY      = 'tally'
     TALLY_DEFAULT  = 'lines'
 
-    # Per-device devlist key: which hub port the board is on.
+    # Per-device configuration key: which hub port the board is on.
     #
     # Required on every device entry, and 'port = none' is how an entry
     # says it is a record rather than a board on the bench.  Such an
@@ -183,6 +183,10 @@ class CLI
     PORT_KEY       = 'port'
     PORT_NONE      = [ nil, 'none', 'null', '-' ].freeze
 
+    # The configuration file used when -C is not given, looked for in
+    # the current directory only.
+    DEFAULT_CONFIG = 'tribble-control.conf'
+
     # Parser
     Defaults     = { :'warm-up' => 5,
                      :openocd   => '/usr/bin/openocd' }
@@ -198,7 +202,8 @@ class CLI
         opts.on       '--hub=KIND', Hub::KINDS.keys,
                 'Which kind of hub: exsys (default) or usb'
         opts.on '-p', '--password=STRING', 'ExSYS hub password'
-        opts.on '-D', '--devlist=FILE',    'Device list file'
+        opts.on '-C', '--config=FILE',
+                'Configuration file (default: ./tribble-control.conf)'
         opts.on '-m', '--method=TYPE', [ 'power', 'usb', 'serial' ],
                 'Device selection method',
                 '  Available: power, usb, serial'
@@ -351,7 +356,7 @@ class CLI
     attr_reader :conf
 
     # The hub's control line, once parse has settled which it is: what
-    # -d named, or what the devlist's 'device' line named, or the one
+    # -d named, or what the configuration's 'device' line named, or the one
     # the host was found to have.
     attr_reader :device
 
@@ -360,7 +365,7 @@ class CLI
         @device             = nil
         @hub_kind           = HUB_DEFAULT
         @switch             = nil
-        @devlist            = nil
+        @entries            = nil
         @protect_ports      = []
         @protect_nodes      = []
         @protect_undeclared = true
@@ -380,7 +385,7 @@ class CLI
         case id
         when /^\d+$/
             port = Integer(id)
-            if (name = @devlist.find {|_k,v| v.dig('port') == port }&.first)
+            if (name = @entries.find {|_k,v| v.dig('port') == port }&.first)
                 [ name, port ]
             end
         else
@@ -388,11 +393,11 @@ class CLI
             # Say which of the two it is.  "id not found" for a name that
             # is in the file, and deliberately so, sends the reader to
             # look for a typo that is not there.
-            if @devlist&.key?(id) && !self.present?(id)
+            if @entries&.key?(id) && !self.present?(id)
                 raise Error, "device '#{id}' is not on the bench: the" \
-                             " devlist gives it #{PORT_KEY} = none"
+                             " configuration gives it #{PORT_KEY} = none"
             end
-            if (port = @devlist.find {|k,_v| k == id }&.last&.dig('port'))
+            if (port = @entries.find {|k,_v| k == id }&.last&.dig('port'))
                 [ name, port ]
             end
         end.tap do |v|
@@ -402,12 +407,12 @@ class CLI
 
     # Translate a port/name to a device serial number
     def serial(id)
-        return nil if @devlist.nil?
+        return nil if @entries.nil?
         case id
         when Integer
-            @devlist.find {|_k,v| v.dig('port') == id }&.last&.dig('serial')
+            @entries.find {|_k,v| v.dig('port') == id }&.last&.dig('serial')
         when String
-            @devlist.find {|k,_v| k == id }&.last&.dig('serial')
+            @entries.find {|k,_v| k == id }&.last&.dig('serial')
         else raise "unsupported id (#{id})"
         end
     end
@@ -420,10 +425,10 @@ class CLI
     # read as present, and so would 'power_cycle = false'. A key that is
     # there means what it says.
     def attribute(id, key, default = nil)
-        return default if @devlist.nil?
+        return default if @entries.nil?
         entry = case id
-                when Integer then @devlist.find {|_k,v| v.dig('port') == id }&.last
-                when String  then @devlist.find {|k,_v| k == id }&.last
+                when Integer then @entries.find {|_k,v| v.dig('port') == id }&.last
+                when String  then @entries.find {|k,_v| k == id }&.last
                 else raise "unsupported id (#{id})"
                 end
         return default if entry.nil?
@@ -450,8 +455,8 @@ class CLI
     # openocd target script for a board, without the .cfg.
     #
     # The whole bench is nRF52 today, which is why that is the default
-    # and no existing devlist has to say so.  It is a key rather than a
-    # constant because a board of another family is a devlist edit, not
+    # and no existing configuration has to say so.  It is a key rather than a
+    # constant because a board of another family is a configuration edit, not
     # a patch: openocd ships a target script for each, and which one a
     # board needs is a property of the board, exactly like interface=.
     def target(id)
@@ -480,7 +485,7 @@ class CLI
         begin
             Integer(v)
         rescue TypeError, ArgumentError
-            raise Error, "devlist entry '#{id}' has work_area = #{v.inspect}," \
+            raise Error, "configuration entry '#{id}' has work_area = #{v.inspect}," \
                          ' which is neither a size nor none'
         end
     end
@@ -491,13 +496,13 @@ class CLI
         Integer(self.attribute(id, 'baud', 230_400))
     end
 
-    # Which tally reads this board's console: the devlist's key for the
+    # Which tally reads this board's console: the configuration's key for the
     # board, else the file's own default, else counting lines.
     def tally(id)
         self.attribute(id, TALLY_KEY, @tally_default).to_s
     end
 
-    # Does the devlist ask for a power cycle of this board at +moment+?
+    # Does the configuration ask for a power cycle of this board at +moment+?
     # The power_cycle key names one moment or a list of them, e.g.
     # after-flash (the only one anything acts on today).
     def power_cycle?(id, moment)
@@ -513,7 +518,7 @@ class CLI
         begin
             Integer(v)
         rescue TypeError, ArgumentError
-            raise Error, "devlist entry '#{id}' has #{PORT_KEY} = #{v.inspect}," \
+            raise Error, "configuration entry '#{id}' has #{PORT_KEY} = #{v.inspect}," \
                          " which is neither a port number nor none"
         end
     end
@@ -533,13 +538,13 @@ class CLI
     # to write down a board that is gone, made name_port() fail and took
     # every 'usb off' with it.
     def devices
-        (@devlist&.keys || []).select {|n| self.present?(n) }
+        (@entries&.keys || []).select {|n| self.present?(n) }
     end
 
     # Every entry, present or not.  For looking a serial up, which is the
     # reason an absent board is kept in the file at all.
     def declared
-        @devlist&.keys || []
+        @entries&.keys || []
     end
 
     # Translate a list of ids (port numbers or device names) to ports
@@ -548,8 +553,8 @@ class CLI
             port = case id
                    when /^\d+$/ then Integer(id)
                    else
-                       if @devlist.nil?
-                           raise Error, "device name '#{id}' needs a devlist"
+                       if @entries.nil?
+                           raise Error, "device name '#{id}' needs a configuration"
                        end
                        self.name_port(id).last
                    end
@@ -564,7 +569,7 @@ class CLI
     #
     # A node with 'port = none' contributes nothing -- there is no port
     # to keep powered -- rather than raising.  A retired board left in
-    # the file is what 'port = none' is for, and the devlist does not
+    # the file is what 'port = none' is for, and the configuration does not
     # become broken because that board's name is also protected.
     def protected_ports
         @protect_ports + @protect_nodes.filter_map {|n|
@@ -572,21 +577,21 @@ class CLI
         }
     end
 
-    # Ports tribble-control may power down.  Ports the devlist does not
+    # Ports tribble-control may power down.  Ports the configuration does not
     # mention are protected unless 'protect { undeclared = no }' says
     # otherwise, and the ports 'protect' names are protected either
     # way.  That is what keeps the Raspberry Pi power feeds out of reach.
     def switchable
-        if @devlist.nil?
-            raise Error, 'no devlist: refusing to power down any port' \
-                         ' (use -D FILE, or --force)'
+        if @entries.nil?
+            raise Error, 'no configuration: refusing to power down any port' \
+                         ' (use -C FILE, or --force)'
         end
         base = if @protect_undeclared
                then self.devices.map {|n| name_port(n).last }
                else @hub.ports
                end
         (base - self.protected_ports).tap {|l|
-            raise Error, 'devlist leaves no switchable port' if l.empty?
+            raise Error, 'configuration leaves no switchable port' if l.empty?
         }
     end
 
@@ -616,7 +621,7 @@ class CLI
         return allowed if ports.empty?
         if (bad = ports - allowed).any?
             raise Error, "refusing to power down port(s) #{bad.join(' ')}:" \
-                         ' protected by the devlist' \
+                         ' protected by the configuration' \
                          ' (use --force)'
         end
         ports
@@ -642,8 +647,9 @@ class CLI
     def each_device(ids, &block)
         return to_enum(:each_device, ids) unless block
 
-        unless @opts.include?(:devlist)
-            raise Error, "devlist is required"
+        unless @opts.include?(:config)
+            raise Error, "a configuration is required: -C FILE, or" \
+                         " ./tribble-control.conf"
         end
 
         name_port_list = (ids.empty? ? self.devices : ids)
@@ -651,7 +657,7 @@ class CLI
 
         # An empty selection is refused, not carried through.
         #
-        # It is reachable: naming no device on a devlist whose every
+        # It is reachable: naming no device on a configuration whose every
         # entry says 'port = none' selects nothing, and each of the
         # three methods below then did something worse than nothing
         # with it.  --method serial splatted the empty list into
@@ -668,7 +674,7 @@ class CLI
         # needed the guard.
         if name_port_list.empty?
             raise Error, if ids.empty?
-                             'no device selected: the devlist declares' \
+                             'no device selected: the configuration declares' \
                                ' none that is on the bench (every entry' \
                                " says #{PORT_KEY} = none)"
                          else
@@ -727,7 +733,7 @@ class CLI
                              " #{@hub}.  Use --method serial, or" \
                              ' --method power'
             end
-            # The serial goes too, when the devlist has one.
+            # The serial goes too, when the configuration has one.
             #
             # 'adapter usb location' does not select anything: measured
             # on 2026-09-16 against openocd 0.12.0, the only release
@@ -776,7 +782,7 @@ class CLI
               @hub.off(port)
             else
               @tty&.warn "#{name}: leaving port #{port} powered, the" \
-                         ' devlist protects it'
+                         ' configuration protects it'
             end
           end
 
@@ -837,7 +843,7 @@ class CLI
       ok
     end
 
-    # The hub's control line, from what -d or the devlist named, or
+    # The hub's control line, from what -d or the configuration named, or
     # from the host when neither named anything.
     #
     # Argument parsing
@@ -848,8 +854,8 @@ class CLI
         # Parse global options
         GlobalParser.order!(argv, into: opts)
 
-        # Before anything else: a tally the devlist names has to be
-        # registered by the time the devlist is read, and a file that
+        # Before anything else: a tally the configuration names has to be
+        # registered by the time the configuration is read, and a file that
         # will not load should say so before a port is touched.
         Array(opts[:require]).each do |file|
             path = File.expand_path(file)
@@ -888,8 +894,17 @@ class CLI
 
 
         # Config
-        if opts.include?(:devlist)
-            file = opts[:devlist]
+        #
+        # -C names the file outright.  Without it, a configuration
+        # named 'tribble-control.conf' in the current directory is used
+        # as though it had been given; neither the home directory nor
+        # /etc is ever looked in.  Given -C, the current directory is
+        # not consulted at all.
+        unless opts.include?(:config)
+            opts[:config] = DEFAULT_CONFIG if File.exist?(DEFAULT_CONFIG)
+        end
+        if opts.include?(:config)
+            file = opts[:config]
             raise Error, "file #{file} doesn't exist" unless File.exist?(file)
             raw = UCL.load_file(file)
 
@@ -897,7 +912,7 @@ class CLI
             # device pass can take them for boards.
             if (former = raw.keys & PROTECT_FORMER.keys).any?
                 raise Error, former.map {|k|
-                    "'#{k}' is no longer a devlist key:" \
+                    "'#{k}' is no longer a configuration key:" \
                       " write #{PROTECT_FORMER[k]}"
                 }.join('; ')
             end
@@ -948,7 +963,7 @@ class CLI
             end
 
             # Which hub this file describes.  A block or a list here is
-            # a file saying one devlist covers two benches, which it
+            # a file saying one configuration covers two benches, which it
             # cannot: every port number in it belongs to one hub.
             #
             # Integer is accepted because UCL hands one back for an
@@ -1022,7 +1037,7 @@ class CLI
                 end
             end
 
-            @devlist  = raw.reject {|k,_|
+            @entries  = raw.reject {|k,_|
                 [ PROTECT_KEY, TALLY_KEY,
                   TYPES_KEY, DEVICE_KEY, HUB_KEY, SWITCH_KEY ].include?(k)
             }
@@ -1030,9 +1045,9 @@ class CLI
             # Every device says which port it is on, or says none. A
             # forgotten port line is a mistake worth a message, not a
             # board quietly dropped off the bench.
-            @devlist.each do |name, entry|
+            @entries.each do |name, entry|
                 unless entry.is_a?(Hash) && entry.key?(PORT_KEY)
-                    raise Error, "devlist entry '#{name}' has no #{PORT_KEY}." \
+                    raise Error, "configuration entry '#{name}' has no #{PORT_KEY}." \
                                  " Give it the hub port, or" \
                                  " '#{PORT_KEY} = none' if the board is no" \
                                  ' longer on the bench'
@@ -1041,7 +1056,7 @@ class CLI
                 # that has to know what a port may look like.  It accepts
                 # a string, deliberately, but name_port(), serial() and
                 # attribute() all compare the RAW value against an
-                # integer id, so a devlist written port = '7' used to
+                # integer id, so a configuration written port = '7' used to
                 # load, count as present, and then leave the board
                 # unswitchable with "port out of range (7)" and unnamed
                 # in 'usb status'.  nil here means none, which is what
@@ -1053,16 +1068,16 @@ class CLI
             # quietly falling back to the tool's defaults: a board that
             # asked for jlink and silently got cmsis-dap is a flash
             # through the wrong probe, reported as success.
-            @devlist.each do |name, entry|
+            @entries.each do |name, entry|
                 next unless (t = entry[TYPE_KEY])
                 next if @types.key?(t.to_s)
                 known = @types.keys.sort
-                raise Error, "devlist entry '#{name}' has #{TYPE_KEY} =" \
+                raise Error, "configuration entry '#{name}' has #{TYPE_KEY} =" \
                              " #{t}, which #{TYPES_KEY} does not define" \
                              " (known: #{known.empty? ? 'none' : known.join(', ')})"
             end
 
-            # Two boards on one port is a devlist that cannot be right,
+            # Two boards on one port is a configuration that cannot be right,
             # and it is what a reassigned port leaves behind when the old
             # entry keeps its number: the tool would then flash, power or
             # connect to whichever of the two it happened to find first,
@@ -1072,7 +1087,7 @@ class CLI
             # 'none' is exempt, that being its whole purpose: any number
             # of entries may declare no port.
             seen = Hash.new {|h, k| h[k] = [] }
-            @devlist.each_key {|name|
+            @entries.each_key {|name|
                 port = self.port_of(name)
                 seen[port] << name unless port.nil?
             }
@@ -1081,24 +1096,24 @@ class CLI
                 detail = clash.sort.map {|port, names|
                     "#{port} (#{names.map {|n| "'#{n}'" }.join(', ')})"
                 }.join('; ')
-                raise Error, "devlist assigns the same #{PORT_KEY} more" \
+                raise Error, "configuration assigns the same #{PORT_KEY} more" \
                              " than once: #{detail}"
             end
 
             # Every protected node names an entry.  A name that matches
             # nothing is a typo, and a typo here protects nothing while
             # reading, in the file, exactly like protection.
-            if (unknown = @protect_nodes - @devlist.keys).any?
+            if (unknown = @protect_nodes - @entries.keys).any?
                 raise Error, "#{PROTECT_KEY}.#{PROTECT_NODES_KEY} names" \
                              " #{unknown.map {|n| "'#{n}'" }.join(', ')}," \
-                             ' which the devlist does not declare'
+                             ' which the configuration does not declare'
             end
         end
 
 
-        # Which hub to drive.  The kind first: --hub, else the devlist's
+        # Which hub to drive.  The kind first: --hub, else the configuration's
         # HUB_KEY line, else exsys.  Then the name, in the order they
-        # are trusted: -d on the command line, the devlist's own
+        # are trusted: -d on the command line, the configuration's own
         # DEVICE_KEY line, and only then the host.  The backend's open
         # holds the policy -- one candidate may be taken, two may not
         # -- and the wording of each refusal; what is settled here is

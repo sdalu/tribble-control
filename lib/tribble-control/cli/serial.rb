@@ -38,7 +38,7 @@ class Serial < CLI::Command
 
         # --method power: this board is the only one powered, so the
         # only probe enumerated is its own.  More than one means the
-        # premise is false -- a probe on a port the devlist protects
+        # premise is false -- a probe on a port the configuration protects
         # stays powered whatever we do -- and the honest answer is to
         # say so rather than pick one and call it this board's.
         probes = Platform.probe_consoles.keys
@@ -49,7 +49,7 @@ class Serial < CLI::Command
             raise Error, "#{probes.size} probes are powered, so none of" \
                          ' them can be attributed to this board:' \
                          " #{probes.map {|p| p[0, 12] }.join(', ')}." \
-                         ' A probe on a port the devlist protects will' \
+                         ' A probe on a port the configuration protects will' \
                          ' do this; read it on Linux with --method usb'
         end
     end

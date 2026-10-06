@@ -2,10 +2,10 @@
 
 require_relative 'helper'
 
-# The openocd command line, which is where every board-specific devlist
+# The openocd command line, which is where every board-specific configuration
 # key ends up and the only place they can be seen to have arrived.
 class TestOpenocd < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
     # The command a run would have executed, without executing it.
     def issued(cli, **hopts)

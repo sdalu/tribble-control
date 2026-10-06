@@ -30,7 +30,7 @@ class USB < Hub
     SYSCTL    = '/sbin/sysctl'
 
     # The two names that are not a serial.  A ugen name is what
-    # usbconfig -d takes; a USB path is what the devlist already uses
+    # usbconfig -d takes; a USB path is what the configuration already uses
     # to place a board.
     UGEN     = /\Augen\d+\.\d+\z/
     USB_PATH = /\A\d+-\d+(?:\.\d+)*\z/
@@ -139,7 +139,7 @@ class USB < Hub
     # is the escape hatch for a hub discovery cannot answer for.  The
     # number in it is enumeration order -- ugen1.4 is the fourth device
     # the second controller attached -- so a replug renumbers it, and a
-    # devlist naming a hub that way points at whatever attached in its
+    # configuration naming a hub that way points at whatever attached in its
     # place.  The other two are stable: a serial follows the HUB, a USB
     # path follows the SOCKET, and each names one host's numbering.
     #
@@ -198,12 +198,12 @@ class USB < Hub
             raise Error, 'unable to auto-detect the hub: this host has no' \
                          ' USB hub below a root hub, and a root hub has no' \
                          " switchable port.  Name the hub with -d, or with" \
-                         " a 'device =' line in the devlist"
+                         " a 'device =' line in the configuration"
         else
             raise Error, 'unable to auto-detect the hub:' \
                          " #{found.size} USB hubs on this host" \
                          " (#{seen(found)}).  Name the one to drive with" \
-                         " -d, or with a 'device =' line in the devlist"
+                         " -d, or with a 'device =' line in the configuration"
         end
     end
 
@@ -228,7 +228,7 @@ class USB < Hub
     end
 
     # One candidate, as an error message names it: the serial leads,
-    # being what the reader is meant to copy into a devlist, then the
+    # being what the reader is meant to copy into a configuration, then the
     # device, the socket, and the port count -- which is the only thing
     # that tells two of the same part apart when neither has a serial.
     def self.describe(hub)
@@ -306,7 +306,7 @@ class USB < Hub
     # it was chosen from, when discovery knew it, which is where the
     # USB path comes from.  The descriptor is read here and not per
     # call: the port count is asked before the hub is opened for real
-    # (the devlist is checked against it) and it cannot change under
+    # (the configuration is checked against it) and it cannot change under
     # us, while the port STATE can and is never remembered.
     def initialize(device, hub: nil, switch: :link, run: nil)
         super()

@@ -5,7 +5,7 @@ require_relative 'helper'
 # types { }: settings a device inherits, and the three things a type
 # may not do.
 class TestTypes < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
     TYPES = <<~UCL
         types {

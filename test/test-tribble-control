@@ -1,11 +1,11 @@
 #!/bin/sh
-# Regression tests for tribble-control's devlist layer.
+# Regression tests for tribble-control's configuration layer.
 #
 # Runs on the bench host, because that is where the gems are: the tool
 # needs exsys, which is not installed on the workstation, so a suite that
 # imports it cannot run here.  Everything tested below is decided during
-# devlist parsing, which happens BEFORE the hub object is constructed, so
-# the tests that only parse a devlist never reach the hub at all.
+# configuration parsing, which happens BEFORE the hub object is constructed, so
+# the tests that only parse a configuration never reach the hub at all.
 #
 # Nothing here writes flash or switches a port off.  One test does reset
 # a board (see the positive control below), and the connect and flash
@@ -43,7 +43,7 @@
 # suite can be pointed at a deliberately broken copy: a test that has
 # never been seen to fail is not evidence.
 #
-# The third is the tally. The bench's devlist says `tally = twr`, which
+# The third is the tally. The bench's configuration says `tally = twr`, which
 # a file loaded with -r registers, so a command that reads a console has
 # to name it. Nothing else here builds a tally, so nothing else needs it.
 set -e
@@ -67,11 +67,11 @@ if [ -z "$host" ]; then
 fi
 tc=${2:-tribble-control}
 tally=${3:-/root/twr-tally.rb}
-dl=/root/devlist.conf
+cfg=/root/tribble.conf
 fail=0
 
-check () {  # check <name> <expected-substring> <devlist-file>
-    got=$(ssh -o BatchMode=yes "root@$host" "$tc -D $3 usb status 2>&1" || true)
+check () {  # check <name> <expected-substring> <configuration-file>
+    got=$(ssh -o BatchMode=yes "root@$host" "$tc -C $3 usb status 2>&1" || true)
     if printf '%s' "$got" | grep -qF "$2"; then
         echo "ok    $1"
     else
@@ -83,18 +83,18 @@ check () {  # check <name> <expected-substring> <devlist-file>
 }
 
 # These patterns match the key, not the column it sits in.  An earlier
-# set spelled out the device list's exact alignment, so reformatting
+# set spelled out the configuration's exact alignment, so reformatting
 # that file made three of them sed nothing and test an unmodified copy.
 # Two then failed -- and the third PASSED, because what it looks for is
 # still true of the original.  A fixture that silently stops being a
 # fixture is worse than one that breaks.
 ssh -o BatchMode=yes "root@$host" "
-  sed 's/^\\( *port *= *\\)none/\\18/'          $dl > /tmp/t-dup.conf
-  sed 's/^ *port *= *none//'                $dl > /tmp/t-noport.conf
-  sed \"s/^\\( *port *= *\\)8\\$/\\1'8'/\"       $dl > /tmp/t-quoted.conf
+  sed 's/^\\( *port *= *\\)none/\\18/'          $cfg > /tmp/t-dup.conf
+  sed 's/^ *port *= *none//'                $cfg > /tmp/t-noport.conf
+  sed \"s/^\\( *port *= *\\)8\\$/\\1'8'/\"       $cfg > /tmp/t-quoted.conf
 "
 
-check "good devlist names port 8"      " 8  DB" "$dl"
+check "good configuration names port 8"      " 8  DB" "$cfg"
 check "duplicate port refused"         "assigns the same port more than once" /tmp/t-dup.conf
 check "missing port refused"           "has no port"                          /tmp/t-noport.conf
 check "quoted port normalised"         " 8  DB"                               /tmp/t-quoted.conf
@@ -124,7 +124,7 @@ status () {  # status <name> <expected-exit> <command...>
 }
 
 say "naming a port = none entry says so" \
-    "is not on the bench" "$tc -D $dl connect B1"
+    "is not on the bench" "$tc -C $cfg connect B1"
 
 # The manual is a file beside the code, reached only through --man, so
 # nothing else in the program would notice if it stopped being found.
@@ -138,7 +138,7 @@ status "--man exits 0"         0             "$tc --man"
 # An empty device selection.
 #
 # exsys reads "no ports named" as "every port", so an empty splat is
-# indistinguishable from a deliberate hub.off(). A devlist whose every
+# indistinguishable from a deliberate hub.off(). A configuration whose every
 # entry says 'port = none' selects nothing, and each_device carried that
 # nothing into the hub: --method serial powered all sixteen ports UP and
 # then reported success for the nought boards it flashed, and --method
@@ -148,28 +148,28 @@ status "--man exits 0"         0             "$tc --man"
 # Only the default method (serial) is exercised here: reproducing the
 # --method power case on a live bench would mean cutting it.
 ssh -o BatchMode=yes "root@$host" \
-    "sed 's/^\\( *port *= *\\)[0-9][0-9]*/\\1none/' $dl > /tmp/t-none.conf"
+    "sed 's/^\\( *port *= *\\)[0-9][0-9]*/\\1none/' $cfg > /tmp/t-none.conf"
 say "an empty device selection is refused" \
-    "no device selected" "$tc -D /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
-status "and it exits 1" 1 "$tc -D /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
-# The positive control: the same command on the real devlist gets past
+    "no device selected" "$tc -C /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
+status "and it exits 1" 1 "$tc -C /tmp/t-none.conf flash /tmp/tribble-test-no-such.hex"
+# The positive control: the same command on the real configuration gets past
 # selection and fails later, on the missing firmware, not on selection.
-say "a real devlist still selects its boards" \
-    "Devices :" "$tc -D $dl flash /tmp/tribble-test-no-such.hex DB"
+say "a real configuration still selects its boards" \
+    "Devices :" "$tc -C $cfg flash /tmp/tribble-test-no-such.hex DB"
 
 # Types.
 #
-# A devlist can say what a KIND of board is once and have the entries
+# A configuration can say what a KIND of board is once and have the entries
 # inherit it. The failure that matters is a type nothing defines: an
 # entry falling back to the tool's defaults would flash through
 # cmsis-dap a board that asked for jlink, and report success.
 ssh -o BatchMode=yes "root@$host" "
-  printf 'BAD {\\n  type = nosuchtype\\n  port = 11\\n}\\n' | cat $dl - > /tmp/t-badtype.conf
+  printf 'BAD {\\n  type = nosuchtype\\n  port = 11\\n}\\n' | cat $cfg - > /tmp/t-badtype.conf
   printf 'types {\n  probe { baud = 19200 }\n}\nT1 {\n  type = probe\n  port = 11\n}\n' \
       > /tmp/t-types.conf"
 check "an undefined type is refused" "which types does not define" /tmp/t-badtype.conf
 say "a type is not a device" \
-    "Devices : T1" "$tc -D /tmp/t-types.conf -r $tally connect --duration 1 T1"
+    "Devices : T1" "$tc -C /tmp/t-types.conf -r $tally connect --duration 1 T1"
 
 # The openocd gate.
 #
@@ -181,24 +181,24 @@ say "a type is not a device" \
 # check happens before the first command is sent.
 say "a missing openocd is named, not ENOENT" \
     "openocd not found at '/tmp/no-such-openocd'" \
-    "$tc -D $dl --openocd=/tmp/no-such-openocd reset DB"
-status "and it exits 1" 1 "$tc -D $dl --openocd=/tmp/no-such-openocd reset DB"
+    "$tc -C $cfg --openocd=/tmp/no-such-openocd reset DB"
+status "and it exits 1" 1 "$tc -C $cfg --openocd=/tmp/no-such-openocd reset DB"
 # The positive control: the real one is still found, or the test above
 # would pass on a tool that rejected every path.
-status "the real openocd is accepted" 0 "$tc -D $dl --openocd=openocd usb status"
+status "the real openocd is accepted" 0 "$tc -C $cfg --openocd=openocd usb status"
 
 # --require, which is how a tally reaches the tool.
 #
-# A devlist naming a tally that nothing registered is an error rather
+# A configuration naming a tally that nothing registered is an error rather
 # than a silent fall back to counting lines: a capture that reported
 # line counts would read exactly like a bench that had gone quiet.
 say "a missing --require file is refused" \
     "no such file to require" \
-    "$tc -D $dl -r /tmp/no-such-tally.rb usb status"
+    "$tc -C $cfg -r /tmp/no-such-tally.rb usb status"
 ssh -o BatchMode=yes "root@$host" \
     "printf 'class T\n def initialize(d); @n = 0; end\n def <<(l); @n += 1; self; end\n def summary; %s; end\nend\nTribbleControl::Tally.register(:test) {|d| T.new(d) }\n' \\
      '\"seen=#{@n}\"' > /tmp/t-tally.rb"
-status "a --require'd file loads" 0 "$tc -D $dl -r /tmp/t-tally.rb usb status"
+status "a --require'd file loads" 0 "$tc -C $cfg -r /tmp/t-tally.rb usb status"
 
 # The exit status of flash and reset.
 #
@@ -211,17 +211,17 @@ status "a --require'd file loads" 0 "$tc -D $dl -r /tmp/t-tally.rb usb status"
 # board: the firmware does not exist, and the bogus serial means openocd
 # never finds an adapter to talk to.
 status "flash exits 1 when the firmware is missing" 1 \
-       "$tc -D $dl flash /tmp/tribble-test-no-such.hex DB"
+       "$tc -C $cfg flash /tmp/tribble-test-no-such.hex DB"
 ssh -o BatchMode=yes "root@$host" \
-    "sed 's/000760103710/000000000000/' $dl > /tmp/t-badserial.conf"
+    "sed 's/000760103710/000000000000/' $cfg > /tmp/t-badserial.conf"
 status "reset exits 1 when the probe cannot be found" 1 \
-       "$tc -D /tmp/t-badserial.conf reset DB"
+       "$tc -C /tmp/t-badserial.conf reset DB"
 # The positive control.  Without it the two tests above would pass on a
 # tool that returned 1 for everything.  It is the one test here that acts
 # on a board: it reboots D4 over SWD, which is what reset is for and what
 # the bench does to it before every run anyway.
 status "reset exits 0 on a board it can reach" 0 \
-       "$tc -D $dl reset D4"
+       "$tc -C $cfg reset D4"
 
 # A declared port with no board on it.
 #
@@ -231,10 +231,10 @@ status "reset exits 0 on a board it can reach" 0 \
 # as "the board is up and saying nothing" -- the one thing connect exists
 # to answer.  Port 11 is declared by nothing and has no board.
 ssh -o BatchMode=yes "root@$host" \
-    "printf 'X9 {\\n  interface = jlink\\n  baud = 115200\\n  port = 11\\n}\\n' | cat $dl - > /tmp/t-empty.conf"
+    "printf 'X9 {\\n  interface = jlink\\n  baud = 115200\\n  port = 11\\n}\\n' | cat $cfg - > /tmp/t-empty.conf"
 say "a port with no board is reported, not captured silently" \
     "no console enumerated" \
-    "$tc -D /tmp/t-empty.conf -r $tally connect --duration 1 X9"
+    "$tc -C /tmp/t-empty.conf -r $tally connect --duration 1 X9"
 
 # The power-cycle gate, which is the one test here that writes flash.
 #
@@ -295,9 +295,9 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
 
         ssh -o BatchMode=yes "root@$host" \
             "printf ':020000040007F3\\n:04F00000DEADBEEFD4\\n:00000001FF\\n' > /tmp/t-marker.hex
-             sed 's/^\\( *ports *= *\\[\\) /\\1 8, /' $dl > /tmp/t-prot8.conf
+             sed 's/^\\( *ports *= *\\[\\) /\\1 8, /' $cfg > /tmp/t-prot8.conf
              grep -q '^ *ports *= *\\[ 8,' /tmp/t-prot8.conf ||
-                 { echo 'FAIL  no protect { ports = [ ... ] } line in $dl to add port 8 to'; exit 1; }"
+                 { echo 'FAIL  no protect { ports = [ ... ] } line in $cfg to add port 8 to'; exit 1; }"
 
         # devnum, not 'usb status'.  A power CYCLE ends with the port on,
         # so a status check afterwards passes whether or not the port was
@@ -309,7 +309,7 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
         before=$(devnum_of "$dbpath")
 
         say "a protected port is not cut after a flash" \
-            "NOT power-cycling" "$tc -D /tmp/t-prot8.conf flash /tmp/t-marker.hex DB"
+            "NOT power-cycling" "$tc -C /tmp/t-prot8.conf flash /tmp/t-marker.hex DB"
         after=$(devnum_of "$dbpath")
         if [ "$before" = "$after" ]; then
             echo "ok    and the board never lost power (devnum $after)"
@@ -319,7 +319,7 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
         fi
 
         say "an unprotected port still gets its cycle" \
-            "power-cycling after flash" "$tc -D $dl flash /tmp/t-marker.hex DB"
+            "power-cycling after flash" "$tc -C $cfg flash /tmp/t-marker.hex DB"
         cycled=$(devnum_of "$dbpath")
         if [ "$after" != "$cycled" ]; then
             echo "ok    and that board did lose power (devnum $after -> $cycled)"

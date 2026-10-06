@@ -2,13 +2,13 @@
 
 require_relative 'helper'
 
-# The devlist layer: what a device list means, and what it refuses.
+# The configuration layer: what a configuration means, and what it refuses.
 #
 # Every one of these was a live defect or a rule the tool now depends
 # on, and all of them were decided before the hub object is used, so
 # none of them needs a hub.
-class TestDevlist < Minitest::Test
-    include DevlistHelper
+class TestConfig < Minitest::Test
+    include ConfigHelper
 
     def test_a_port_is_required
         assert_match(/has no port/, refusal_for("A1 { serial = '01' }"))
@@ -127,9 +127,9 @@ class TestDevlist < Minitest::Test
     # The two keys the block replaced are met by name: left to the
     # device pass they would be refused as entries with no port.
     def test_the_former_keys_say_what_to_write_instead
-        assert_match(/'reserved' is no longer a devlist key/,
+        assert_match(/'reserved' is no longer a configuration key/,
                      refusal_for("reserved = [ 16 ]\nA1 { port = 1 }"))
-        assert_match(/'undeclared' is no longer a devlist key/,
+        assert_match(/'undeclared' is no longer a configuration key/,
                      refusal_for("undeclared = switch\nA1 { port = 1 }"))
     end
 
@@ -150,5 +150,55 @@ class TestDevlist < Minitest::Test
         cli = cli_for("A1 { port = 1 }\nOld { port = none }")
         e = assert_raises(TribbleControl::CLI::Error) { cli.name_port('Old') }
         assert_match(/is not on the bench/, e.message)
+    end
+
+    # -C's own lookup: no flag at all, and a file named
+    # tribble-control.conf in the current directory is used as though
+    # it had been given.
+    def test_the_cwd_tribble_control_conf_is_used_without_dash_c
+        Dir.mktmpdir('tribble-test') {|dir|
+            Dir.chdir(dir) {
+                File.write('tribble-control.conf', "A1 { port = 1 }\n")
+                cli = TribbleControl::CLI.new.parse([ '-d', File::NULL, 'usb' ])
+                quieten(cli)
+                assert_equal [ 'A1' ], cli.devices
+            }
+        }
+    end
+
+    # -C overrides the lookup outright: the cwd file is not consulted
+    # at all once -C names one.
+    def test_dash_c_wins_over_the_cwd_file
+        Dir.mktmpdir('tribble-test') {|dir|
+            Dir.chdir(dir) {
+                File.write('tribble-control.conf', "A1 { port = 1 }\n")
+                File.write('other.conf',            "B1 { port = 2 }\n")
+                cli = TribbleControl::CLI.new
+                                 .parse([ '-d', File::NULL,
+                                          '-C', 'other.conf', 'usb' ])
+                quieten(cli)
+                assert_equal [ 'B1' ], cli.devices
+            }
+        }
+    end
+
+    # Neither -C nor a cwd file: behaves exactly as with no
+    # configuration at all.
+    def test_no_dash_c_and_no_cwd_file_is_no_configuration
+        Dir.mktmpdir('tribble-test') {|dir|
+            Dir.chdir(dir) {
+                cli = TribbleControl::CLI.new.parse([ '-d', File::NULL, 'usb' ])
+                quieten(cli)
+                assert_equal [], cli.devices
+            }
+        }
+    end
+
+    # The removed global option: no alias, no deprecation message, a
+    # bare refusal from the option parser itself.
+    def test_global_dash_d_is_refused_by_the_option_parser
+        assert_raises(OptionParser::InvalidOption) {
+            TribbleControl::CLI.new.parse([ '-D', 'whatever', 'usb' ])
+        }
     end
 end

@@ -8,7 +8,7 @@ pieces fit and where they are meant to give.
 The one sentence the rest of this file elaborates: **the subject is a
 USB hub.**  Anything that is knowledge of a particular chip, a
 particular probe or a particular firmware is pushed out of the code and
-into the device list, or into a file the device list names.
+into the configuration, or into a file the configuration names.
 
 
 ## The shape of a run
@@ -17,7 +17,7 @@ into the device list, or into a file the device list names.
 exe/tribble-control     argv in; one rescue turns an exception into a line
       │
       ▾
-CLI#parse             -r files, then the devlist, then the hub object
+CLI#parse             -r files, then the configuration, then the hub object
       │
       ▾
 CLI#run               resolves openocd if the command declares OPENOCD
@@ -37,7 +37,7 @@ Command#run(argv, **opts)
 ```
 
 Everything that touches hardware is below `each_device`.  Everything
-that decides *which* hardware is above it, in the devlist layer, and is
+that decides *which* hardware is above it, in the configuration layer, and is
 settled before the hub object exists — which is why most of the test
 suite never reaches a hub.
 
@@ -54,10 +54,10 @@ lib/tribble-control/
     hub/exsys.rb           the ExSYS hub, over the exsys gem
     hub/usb.rb             any hub that switches its own ports, via usbconfig
     tally.rb               the seam where firmware knowledge goes
-    cli.rb                 options, devlist, each_device, openocd
+    cli.rb                 options, configuration, each_device, openocd
     cli/*.rb               one file per command (usb, flash, ...)
 man/man1/tribble-control.1   the manual (mdoc), rendered by --man
-examples/devlist.conf      a device list to copy and edit
+examples/tribble.conf      a configuration to copy and edit
 examples/vbus-check        the LED recipe as a script: cut, hold, restore, ask
 test/test_*.rb             minitest: everything that needs no hub
 test/support/fake_hub.rb   a pty speaking the ExSYS hub's real frames
@@ -66,11 +66,14 @@ test/test-tribble-control    the regression suite, against a deployed copy
 ```
 
 
-## The devlist is the only model of the bench
+## The configuration is the only model of the bench
 
 `CLI#parse` reads the file with UCL, lifts out the six keys that are
 not devices — `device`, `hub`, `switch`, `protect`, `tally`, `types` —
-and treats everything else as a device entry.
+and treats everything else as a device entry.  The file itself comes
+from `-C`, or, failing that, from `./tribble-control.conf` in the
+current directory if one exists there; neither path is consulted when
+the other supplies the file.
 
 A setting is then resolved by `attribute(id, key, default)`:
 
@@ -121,21 +124,21 @@ What is refused at load rather than discovered later:
     boolean.**  The block decides what may be powered down, so a line
     in it that is quietly ignored reads as protection and is none —
     `port = [ 13 ]` for `ports` being the way to write that.
-  * **A `protect` `nodes` entry the devlist does not declare.**  Same
+  * **A `protect` `nodes` entry the configuration does not declare.**  Same
     reason, one step further: a misspelled board name protects nothing
     and looks in the file exactly like a protected board.
   * **A top-level `reserved` or `undeclared`.**  The two keys the
     `protect` block replaced are refused by name, with the line to
     write instead.  Left to the device pass they would be refused as
-    entries with no port — true, and no help — and a devlist that then
+    entries with no port — true, and no help — and a configuration that then
     gave them one would load with every port they named switchable.
-  * **A `device` that is a block or a list.**  A devlist is one bench,
+  * **A `device` that is a block or a list.**  A configuration is one bench,
     and one bench is one hub; a file naming two would be a file whose
     port numbers mean two different things.
 
 `port` is normalised to an Integer, or to `nil` for `none`, once at
 load — `port_of` is the only place that has to know what a port may
-look like.  Write a devlist with `port = '8'` and it is an Integer by
+look like.  Write a configuration with `port = '8'` and it is an Integer by
 the time anything reads it.
 
 `port = none` is how an entry says it is a record rather than a board:
@@ -153,7 +156,7 @@ the file does not mention, `ports` and `nodes` for the ones it names.
 
 One key because *protected* is the word the tool already uses — `usb
 status` prints `(protected)`, the manual gives it a section, and the
-refusals say the devlist protects a port.  As two top-level keys,
+refusals say the configuration protects a port.  As two top-level keys,
 `undeclared` and `reserved`, that word named neither of them, and the
 reader had to find two lines to know what a bench refuses to switch.
 `undeclared` is a boolean rather than the old `protect`/`switch` pair
@@ -175,7 +178,7 @@ will try to reach a board that is not there.
 The two keys the block replaced are refused by name rather than
 accepted as aliases.  An alias keeps two spellings of one rule alive
 for a file that one tool reads on one bench, and the reader then has to
-know both; the break costs one edit per devlist, paid once, loudly, and
+know both; the break costs one edit per configuration, paid once, loudly, and
 before anything is switched.
 
 
@@ -197,7 +200,7 @@ SET_FEATURE/CLEAR_FEATURE of PORT_POWER switches it.  It needs no gem,
 because the switching is on the bus itself rather than on a serial line
 wired beside it, and it is FreeBSD-only for now — the refusal is in
 `Hub::USB.open`, so nothing above it knows about platforms.
-`Hub.backend(kind)` maps the devlist's `hub =` word to the class and
+`Hub.backend(kind)` maps the configuration's `hub =` word to the class and
 requires it on demand, so a host lacking what one backend needs still
 runs the other.
 
@@ -206,7 +209,7 @@ about hubs that the first one contradicts:
 
   * **The kind is declared, never inferred.**  `hub = exsys|usb` says
     what the hub *is*, not which tool drives it on this host, so the
-    same devlist line keeps working the day a Linux implementation
+    same configuration line keeps working the day a Linux implementation
     lands.  It cannot be read off `device =`: a USB path such as
     `1-1.1` names an FT232's socket for the ExSYS hub and the hub
     itself for a usb hub.  Inferring the kind from the shape of the
@@ -269,14 +272,14 @@ which `CLI.run` prints as one line; `Hub::ExSYS` translates the gem's
 own error class into it so the commands never see the gem's.
 
 
-## Which hub, and why the devlist names it
+## Which hub, and why the configuration names it
 
 `ExSYS::ManagedUSB.available` returns every FTDI 0403:6001 on the host
 as `{ device:, serial:, usb_path: }`.  `Hub::ExSYS.open` turns that
 plus what was asked for into the one line the gem is handed:
 
 ```text
-Hub::ExSYS.open(named)    named = -d, else the devlist's `device`, else nil
+Hub::ExSYS.open(named)    named = -d, else the configuration's `device`, else nil
 
     named has a '/' in it?          ──yes──▸  the serial line itself,
                    │                          used as given
@@ -317,7 +320,7 @@ Two decisions are load-bearing:
     that adapter is probed.  It therefore depends on what else attached
     first, and it is reused — unplug the adapter holding `ttyUSB0` and
     the next thing to attach takes `ttyUSB0`.  Two hubs can swap names
-    across a reboot or while the machine is up, and every devlist
+    across a reboot or while the machine is up, and every configuration
     naming them that way then points at the other bench, silently.
   * **A serial and a USB path are both stable, and not the same
     promise.**  A serial is in the FT232's EEPROM and follows the
@@ -349,8 +352,8 @@ candidate for its hub descriptor, so a hub that will not answer one is
 listed all the same with no port count — a listing must not be stopped
 by one odd hub — and choosing that hub is what is refused.
 
-The devlist is the place for it because a devlist is already one bench:
-the command that says which device list then says which hub, and that
+The configuration is the place for it because a configuration is already one bench:
+the command that says which configuration then says which hub, and that
 is the only thing it has to say.  `-d` stays for the one-off.
 
 The split with the `exsys` gem is along the same line as everywhere
@@ -363,7 +366,7 @@ belongs here.
     machine matches, and telling them apart means opening the line and
     writing to it.  So it lists, with serials, and decides nothing.
   * This tool decides. `Hub::ExSYS.open` is where the policy and the
-    wording live: what `-d` means against what the devlist says, that
+    wording live: what `-d` means against what the configuration says, that
     one candidate may be taken and two may not, and what to print when
     it refuses.  None of that is a fact about hubs; it is a fact about
     this tool's promise not to switch the wrong bench.  It sits in the
@@ -430,9 +433,9 @@ on the method:
 | `power`  | the openocd four only                   |
 
 The openocd four are `interface:`, `target:`, `transport:` and
-`work_area:` — all devlist keys, all with defaults, none of them a
+`work_area:` — all configuration keys, all with defaults, none of them a
 constant anywhere in the code.  That is what makes a board of another
-family a devlist edit rather than a patch.
+family a configuration edit rather than a patch.
 
 `power` carries neither a serial nor a path because it does not need
 one: it cuts every switchable port and brings up one board at a time,
@@ -443,7 +446,7 @@ it leaves the bench powered off.
 Two things about this method are load-bearing:
 
   * **An empty selection is refused, never carried through.**  It is
-    reachable — a devlist whose every entry says `port = none`, with no
+    reachable — a configuration whose every entry says `port = none`, with no
     board named on the command line — and each of the three branches
     would otherwise do something worse than nothing with it: an empty
     splat into the hub reads as *every port*, so selecting no board
@@ -469,7 +472,7 @@ openocd \
   -c 'transport select <transport>' \          # unless transport = none
   -c 'source [find target/<target>.cfg]' \
   -c 'adapter usb location <usb>' \            # --method usb only
-  -c 'adapter serial <serial>' \               # whenever the devlist has one
+  -c 'adapter serial <serial>' \               # whenever the configuration has one
   -c '<each command the caller passed>' \
   -c shutdown
 ```
@@ -477,7 +480,7 @@ openocd \
 `adapter usb location` is documentation of intent, not a selector:
 openocd 0.12 reaches the same adapter whichever path it is given,
 including one that does not exist.  `adapter serial` is what actually
-selects, which is why `--method usb` passes it too whenever the devlist
+selects, which is why `--method usb` passes it too whenever the configuration
 has one.  A board with no `serial =`, on a bench with more than one
 adapter powered, is a board chosen at random.
 
@@ -489,9 +492,9 @@ true`; `connect` does not, and checks when it reaches for it under
 
 ## Extension points
 
-### A new board family or probe — the devlist first
+### A new board family or probe — the configuration first
 
-Add the keys to the devlist, or to a `types` block.  `interface` and
+Add the keys to the configuration, or to a `types` block.  `interface` and
 `target` are independent: the first is the openocd interface script
 (which probe), the second its target script (which chip).  Either is
 any name openocd can find, without the `.cfg`.
@@ -526,7 +529,7 @@ TribbleControl::Tally.register(:twr) do |device|
 end
 ```
 
-`tally =` at the top of the devlist sets the bench's default and
+`tally =` at the top of the configuration sets the bench's default and
 `tally =` inside a device entry overrides it for that board, so one
 capture can read two firmwares.  The block is called once per board per
 run, so a tally may keep whatever state it likes without sharing it.
@@ -543,7 +546,7 @@ capture that wants no summary at all — a null object rather than `nil`,
 so `connect` has one kind of thing to talk to.
 
 A name nothing registered is an error, not a silent fall back to
-counting lines: a devlist asking for `twr` on a run that forgot `-r`
+counting lines: a configuration asking for `twr` on a run that forgot `-r`
 would otherwise capture a whole bench and report nothing but line
 counts, which reads as a firmware saying nothing.
 
@@ -614,7 +617,7 @@ rather than read, so a third is likely to arrive short again:
 
 A backend is a subclass of `Hub` in a file under
 `lib/tribble-control/hub/`, listed in `Hub::KINDS` under the word a
-devlist's `hub =` line uses, and loaded on demand by
+configuration's `hub =` line uses, and loaded on demand by
 `Hub.backend(kind)`.  What it has to answer:
 
 | Method               | Answers                                          |
@@ -731,7 +734,7 @@ failed, which `CLI.run` turns into exit status 1.
     is accepted and the boards that go dark are somebody else's — so
     two candidates is an error, not a warning and not a default.
   * **Failure is reported before the bench is disturbed.**  A missing
-    openocd, an unwritable `--debug` file and an unreadable devlist are
+    openocd, an unwritable `--debug` file and an unreadable configuration are
     all found before a port is switched.  Finding out that a path is
     unwritable after a bench has been powered down is finding out too
     late.
@@ -783,12 +786,12 @@ failed, which `CLI.run` turns into exit status 1.
 
 Two suites, layered the way the code is:
 
-| Suite             | Covers                                 | Needs     |
-| :---------------- | :------------------------------------- | :-------- |
-| `rake test`       | the devlist layer and the hub exchange | nothing   |
-| `rake test:bench` | the whole tool, deployed               | the bench |
+| Suite             | Covers                                       | Needs     |
+| :---------------- | :------------------------------------------- | :-------- |
+| `rake test`       | the configuration layer and the hub exchange | nothing   |
+| `rake test:bench` | the whole tool, deployed                     | the bench |
 
-`rake test` covers devlist parsing, types, tallies, hub selection and
+`rake test` covers configuration parsing, types, tallies, hub selection and
 the openocd command line, and drives the hub exchange itself against a
 pty emulator speaking the real frames.  Hub selection is tested against
 a stubbed `ExSYS::ManagedUSB.available` under `Hub::ExSYS`, since what is being asserted
@@ -801,7 +804,7 @@ and the read-back that catches a hub which accepts a switch and does
 not switch are all asserted against `test/support/fake_usbconfig.rb`.
 
 The split is not an accident of history: nearly everything worth
-asserting is decided during devlist parsing, which happens before the
+asserting is decided during configuration parsing, which happens before the
 hub object is constructed, so it can be proved on the machine where the
 code is written.  A project whose only proof requires a lab in another
 city cannot be checked by whoever is holding it.
@@ -812,7 +815,7 @@ has never been seen to fail is not evidence.  What stays baked into it
 is that bench's inventory — board names, a probe serial, a USB path,
 the flash page the gate writes — and pointing the suite at another
 bench means editing them.  The power-cycle gate needs one thing of
-that bench's devlist as well: a `protect { ports = [ ... ] }` line to
+that bench's configuration as well: a `protect { ports = [ ... ] }` line to
 add the flashed board's port to.  It says so and stops rather than
 running a test that could only pass.
 

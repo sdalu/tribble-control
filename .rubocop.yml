@@ -206,7 +206,7 @@ Naming/FileName:                          { Enabled: false }
 # hash, and this cop reads the destructuring as one.
 Style/HashEachMethods:                    { Enabled: false }
 
-# Two passes over the devlist, each with its own message: one says a
+# Two passes over the configuration, each with its own message: one says a
 # type is undefined, the other that a port is claimed twice. Combined,
 # neither could say which it found.
 Style/CombinableLoops:                    { Enabled: false }

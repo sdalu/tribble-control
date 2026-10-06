@@ -13,10 +13,10 @@ class Flash < CLI::Command
     # was, and it cuts every port and re-powers one board at a time: the
     # whole bench in sequential rounds, left powered down at the end.
     # Selecting by adapter serial needs serial= on every board, which the
-    # devlist now has, and it was measured on 2026-09-16 rather than
+    # configuration now has, and it was measured on 2026-09-16 rather than
     # assumed: with all four J-Links live, a flash addressed by serial
     # landed on the board whose FICR.DEVICEID matched and left its
-    # neighbours' flash byte-for-byte unchanged, and the devlist's
+    # neighbours' flash byte-for-byte unchanged, and the configuration's
     # power_cycle = after-flash still fired.  'power' stays for a board
     # whose serial is missing or wrong.
     Methods  = [ 'serial', 'power' ]
@@ -33,7 +33,7 @@ class Flash < CLI::Command
         # Options
         opts.separator 'Options:'
         opts.on '--power-cycle', 'Power the port off and on again after a',
-                                 'successful flash, whatever the devlist',
+                                 'successful flash, whatever the configuration',
                                  'says (power_cycle = after-flash)'
     end
 
@@ -58,7 +58,7 @@ class Flash < CLI::Command
                 # never reports a transmission again until the module is
                 # power-cycled: it receives, resolves nothing, and logs
                 # "our TX timestamps are missing".  An SWD reset alone does
-                # not do it, so only the flash needs the cycle.  The devlist
+                # not do it, so only the flash needs the cycle.  The configuration
                 # says which boards need it (power_cycle = after-flash), so
                 # a flash by hand on the hub gets it right; --power-cycle
                 # forces it for any board.
@@ -84,7 +84,7 @@ class Flash < CLI::Command
                         # that reports no transmission, which looks like a
                         # radio fault rather than a skipped step.
                         tty&.warn "Device #{name}: NOT power-cycling," \
-                                  " the devlist protects port #{port}." \
+                                  " the configuration protects port #{port}." \
                                   ' The board may be in the state' \
                                   ' power_cycle exists to avoid'
                     end

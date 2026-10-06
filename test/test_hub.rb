@@ -9,14 +9,14 @@ require_relative 'helper'
 # to write it back, and the protections that decide which ports may be
 # in that word.
 class TestHub < Minitest::Test
-    include DevlistHelper
+    include ConfigHelper
 
-    DEVLIST = "protect { ports = [ 16 ] }\n" \
-              "A1 { port = 1 }\nA2 { port = 2 }\nA3 { port = 3 }\n"
+    CONFIG = "protect { ports = [ 16 ] }\n" \
+             "A1 { port = 1 }\nA2 { port = 2 }\nA3 { port = 3 }\n"
 
     def setup
         @hub = FakeHub.new(state: 0b0110)          # ports 2 and 3 on
-        @cli = cli_for(DEVLIST, device: @hub.path)
+        @cli = cli_for(CONFIG, device: @hub.path)
     end
 
     def teardown
@@ -94,7 +94,7 @@ class TestHub < Minitest::Test
 
     def test_a_wrong_password_is_reported_not_swallowed
         hub = FakeHub.new(state: 0, password: 'other')
-        cli = cli_for(DEVLIST, '-p', 'pass', device: hub.path)
+        cli = cli_for(CONFIG, '-p', 'pass', device: hub.path)
         assert_raises(TribbleControl::Hub::Error) {
             TribbleControl::CLI::USB.new(cli).run([ 'on', '1' ], force: false) }
     ensure
