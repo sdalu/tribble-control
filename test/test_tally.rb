@@ -175,4 +175,21 @@ class TestTally < Minitest::Test
             TribbleControl::Tally.instance_variable_get(:@registry).delete(n)
         }
     end
+
+    # An empty --tally used to mean no --tally, so every board fell back
+    # to the configuration without a word: the very fallback the option
+    # exists to prevent.
+    def test_an_empty_tally_is_refused
+        assert_match(/--tally: an empty NAME/, refusal('--tally='))
+        assert_match(/--tally: an empty NAME/, refusal('--tally', 'lines,,A1=none'))
+    end
+
+    def test_an_empty_require_is_refused
+        e = assert_raises(TribbleControl::CLI::Error) {
+            cli_for('', '-r', "#{__FILE__},,#{__FILE__}") }
+        assert_match(/-r: an empty file name/, e.message)
+        e = assert_raises(TribbleControl::CLI::Error) {
+            cli_for('', '--require=') }
+        assert_match(/-r: an empty file name/, e.message)
+    end
 end

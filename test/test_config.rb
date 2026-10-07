@@ -60,6 +60,21 @@ class TestConfig < Minitest::Test
         assert_equal 'lines',     cli.tally('A1')
     end
 
+    # Every spelling work_area takes for none means none here too; before,
+    # None and null reached openocd as 'transport select None' and
+    # 'transport select ', and the boolean 'no' as 'transport select false'.
+    def test_transport_takes_a_name_or_none_and_refuses_the_rest
+        assert_equal 'jtag', cli_for("A1 { port = 1, transport = jtag }").transport('A1')
+        %w[none None NONE null -].each do |v|
+            assert_nil cli_for("A1 { port = 1, transport = #{v} }").transport('A1'), v
+        end
+        %w[no 1 ''].each do |v|
+            e = assert_raises(TribbleControl::CLI::Error, v) {
+                cli_for("A1 { port = 1, transport = #{v} }").transport('A1') }
+            assert_match(/neither a transport nor none/, e.message)
+        end
+    end
+
     def test_work_area_takes_hex_or_none_and_refuses_the_rest
         assert_equal 0x800, cli_for("A1 { port = 1, work_area = 0x800 }").work_area('A1')
         assert_nil          cli_for("A1 { port = 1, work_area = none }").work_area('A1')

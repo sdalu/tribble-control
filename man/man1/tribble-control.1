@@ -381,6 +381,7 @@ register.
 Repeatable: every
 .Fl r
 given is loaded, in order.
+An empty name, from \-\-require= or a doubled comma, is refused.
 See
 .Sx TALLIES .
 .It Fl -openocd Ns = Ns Ar PATH
@@ -586,7 +587,12 @@ The transport openocd selects:
 (the default) or whatever the chip and the probe both speak, commonly
 .Cm jtag .
 .Cm none
-selects nothing and leaves the choice to the interface script.
+selects nothing and leaves the choice to the interface script; it is
+spelt as for
+.Cm work_area ,
+in any case, or null, or \-.
+Anything else that is not a name \(em a boolean such as no, a number, an
+empty string \(em is refused.
 Making
 .Cm target
 a key and leaving this one fixed would be half a fix: a chip reached
@@ -1155,8 +1161,9 @@ key (or its type's), the file's
 .Cm tally ,
 then
 .Cm lines .
-Two run\-wide names, two names for one board, or a DEV the run does not
-capture are refused rather than resolved by order.
+Two run\-wide names, two names for one board, a DEV the run does not
+capture, or an empty NAME (\-\-tally= or a doubled comma) are refused
+rather than resolved by order or left to the configuration.
 .Pp
 Every board's tally is built before a port is switched, so a name
 nothing has registered stops the run before \-\-off cuts the bench.

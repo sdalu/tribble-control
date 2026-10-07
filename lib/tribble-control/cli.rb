@@ -485,14 +485,25 @@ class CLI
         self.attribute(id, 'target', 'nrf52').to_s
     end
 
-    # The SWD/JTAG transport openocd selects, or 'none' to select
+    # The SWD/JTAG transport openocd selects, or nil for 'none': select
     # nothing and let the interface script decide.
     #
     # Making target= a key and leaving this one a constant would have
     # been half a fix: a chip reached over JTAG takes the right target
     # script and then fails on a transport it does not have.
+    #
+    # Read the way work_area is.  This used to be .to_s and nothing
+    # else, so 'None' and UCL's null -- which work_area takes as none --
+    # sent openocd 'transport select None' and 'transport select ', and
+    # 'no', a UCL boolean, sent 'transport select false'.
     def transport(id)
-        self.attribute(id, 'transport', 'swd').to_s
+        v = self.attribute(id, 'transport', 'swd')
+        return nil if PORT_NONE.include?(v.is_a?(String) ? v.downcase : v)
+        unless v.is_a?(String) && !v.strip.empty?
+            raise Error, "configuration entry '#{id}' has transport = #{v.inspect}," \
+                         ' which is neither a transport nor none'
+        end
+        v
     end
 
     # Target RAM openocd may borrow for its flash algorithms, or 'none'
@@ -882,6 +893,15 @@ class CLI
         # Before anything else: a tally the configuration names has to be
         # registered by the time the configuration is read, and a file that
         # will not load should say so before a port is touched.
+        #
+        # An empty name -- '-r a.rb,,b.rb', or '--require=' -- is refused
+        # here rather than reaching File.expand_path as nil, which said
+        # only "no implicit conversion of nil into String".
+        if opts.include?(:require) &&
+           (opts[:require].empty? || opts[:require].any? {|f| f.to_s.empty? })
+            raise Error, '-r: an empty file name (--require= or a doubled' \
+                         ' comma)'
+        end
         Array(opts[:require]).each do |file|
             path = File.expand_path(file)
             raise Error, "no such file to require: #{file}" \

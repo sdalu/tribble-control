@@ -66,6 +66,15 @@ class Connect < CLI::Command
         run     = nil
         boards  = {}
 
+        # '--tally=' stores an empty list and 'a,,b' a nil between a and
+        # b.  The first used to read as no --tally at all, handing every
+        # board back to the configuration -- the silent fallback this
+        # option exists to prevent -- and the second crashed on nil.
+        if given && (given.empty? || given.any? {|s| s.to_s.empty? })
+            raise Error, '--tally: an empty NAME (--tally= or a doubled' \
+                         ' comma); give NAME or DEV=NAME'
+        end
+
         Array(given).each do |spec|
             dev, eq, which = spec.rpartition('=')
             if eq.empty?
