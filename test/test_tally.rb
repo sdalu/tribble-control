@@ -176,7 +176,7 @@ class TestTally < Minitest::Test
         }
     end
 
-    # An empty --tally used to mean no --tally, so every board fell back
+    # An empty --tally taken as no --tally would hand every board back
     # to the configuration without a word: the very fallback the option
     # exists to prevent.
     def test_an_empty_tally_is_refused

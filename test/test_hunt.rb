@@ -2,7 +2,9 @@
 
 require_relative 'helper'
 
-# The defects the 0.4.4 bug hunt found, each by the input that showed it.
+# Guards that each have one input that shows them: a second probe under
+# --method power, a zero-padded port, an unreadable console, a missing
+# firmware, --interactive with two boards.
 class TestHunt < Minitest::Test
     include ConfigHelper
 
@@ -58,7 +60,7 @@ class TestHunt < Minitest::Test
         assert_equal %w[A1], seen
     end
 
-    # Integer() read a leading 0 as octal: '010' was port 8.
+    # Integer() reads a leading 0 as octal: '010' would be port 8.
     def test_ports_are_decimal_even_with_a_leading_zero
         cli = cli_with("A8 { port = 8 }\nA10 { port = 10 }\nprotect { ports = [ \"010\" ] }")
         assert_equal [ 10 ], cli.port_list([ '010' ])

@@ -12,9 +12,9 @@ require 'pty'
 #
 # The state word goes out low byte first, which is the one thing about
 # this protocol that is easy to get backwards: C4FFFFFF is ports 3 and
-# 7 upward, not 0xC4FFFFFF read left to right. Writing this emulator
-# big-endian was caught immediately by the real gem refusing to agree
-# with it, which is the sort of thing an emulator is for.
+# 7 upward, not 0xC4FFFFFF read left to right.  An emulator that got it
+# backwards would be refused by the real gem, which is the sort of thing
+# an emulator is for.
 class FakeHub
     attr_reader :path, :log
 

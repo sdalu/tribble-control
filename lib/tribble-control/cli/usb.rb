@@ -13,16 +13,13 @@ class USB < CLI::Command
 
     Defaults = { :default => nil }
     Parser   = OptionParser.new do |opts|
-        # Usage
         opts.banner = "Usage: #{PROGNAME} usb [options]" \
                       " status|on|off|toggle|set [PORTS...]"
 
-        # Description
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''
 
-        # Options
         opts.separator 'Options:'
         opts.on '-D', '--default=BOOLEAN', TrueClass,
                       'Default state if not specified'

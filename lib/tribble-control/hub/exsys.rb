@@ -68,11 +68,10 @@ class ExSYS < Hub
     # the host, which is a hub's control adapter and also every other
     # FT232 attached -- the gem says so itself, and deliberately
     # reports rather than decides, because telling them apart means
-    # opening the line and writing to it.  Two of them used to make
-    # this a coin toss decided by enumeration order, settled silently,
-    # on a command that then switched somebody else's ports.  It
-    # refuses instead, and lists what it found with the serials to
-    # choose between them.
+    # opening the line and writing to it.  With two, taking one would
+    # be a coin toss decided by enumeration order, on a command that
+    # might then switch somebody else's ports, so it refuses and lists
+    # what it found with the serials to choose between them.
     def self.open(named, password: nil)
         if named&.include?(File::SEPARATOR)
             # A line named outright is used as given, and discovery is

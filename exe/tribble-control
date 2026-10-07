@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 #
-# tribble-control -- power, flash and monitor the devices plugged into an
-# ExSYS 16-port managed USB hub.  See `tribble-control --man`.
+# tribble-control -- power, flash and monitor the boards plugged into a
+# switchable USB hub.  See `tribble-control --man`.
 #
 require 'tribble-control'
 

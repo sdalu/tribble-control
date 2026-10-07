@@ -16,15 +16,12 @@ class Connect < CLI::Command
     Defaults = {}
     Repeatable = [ :tally ]
     Parser   = OptionParser.new do |opts|
-        # Usage
         opts.banner = "Usage: #{PROGNAME} connect [options] PORT"
 
-        # Description
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''
 
-        # Options
         opts.separator 'Options:'
         opts.on '--off', 'Start with all devices off'
         opts.on '--reset', 'Reset each board once its console is open,' \
@@ -51,25 +48,22 @@ class Connect < CLI::Command
     # whatever neither names.  So, for one board, the first of: DEV=NAME,
     # NAME, the board's own tally key (or its type's), the file's, lines.
     #
-    # Built here, all of them, before anything is switched: an unknown
-    # name found once --off had cut the bench, or once the first board's
-    # reader was already running, is a failure that has already done
-    # something.  A board later skipped for having no console has been
-    # built for nothing, which costs a block call.
+    # Built here, all of them, before anything is switched, so an unknown
+    # name stops the run before --off cuts the bench or a reader starts.
+    # A board later skipped for having no console costs a block call.
     #
-    # The bench changes firmware from one campaign to the next on the
-    # same boards, and the configuration is about boards, not about what
-    # is flashed on them -- which is why the run, not the file, gets the
-    # last word.
+    # The run gets the last word because the configuration is about
+    # boards, not about what is flashed on them, and the same board
+    # carries different firmware from one run to the next.
     def tallies(ids, given)
         names   = (ids.empty? ? devices : ids).map {|id| name_of(id) }
         run     = nil
         boards  = {}
 
         # '--tally=' stores an empty list and 'a,,b' a nil between a and
-        # b.  The first used to read as no --tally at all, handing every
+        # b.  Taken as no --tally at all, the first would hand every
         # board back to the configuration -- the silent fallback this
-        # option exists to prevent -- and the second crashed on nil.
+        # option exists to prevent.
         if given && (given.empty? || given.any? {|s| s.to_s.empty? })
             raise Error, '--tally: an empty NAME (--tally= or a doubled' \
                          ' comma); give NAME or DEV=NAME'
@@ -134,8 +128,7 @@ class Connect < CLI::Command
         # in its own words, before a counter is ever asked for.
         counters = opts.include?(:config) ? tallies(argv, opts[:tally]) : {}
 
-        # Before anything is powered, reset or started: this used to be
-        # found only once every reader was running.
+        # Before anything is powered, reset or started.
         if opts[:interactive] && opts.include?(:config) && counters.size != 1
             raise Error, 'connect: --interactive takes a single device' \
                          " (#{counters.size} selected)"
@@ -153,14 +146,10 @@ class Connect < CLI::Command
         each_device(argv).each do |name, hopts={}|
           # No tty, no reader.  usb_to_tty returns nil when the glob finds
           # no ttyACM under the port: the board is dead, unplugged, or
-          # simply slower to enumerate than --warm-up allowed.  This used
-          # to carry the nil onward, print "Connecting to C2 on " with an
-          # empty path, count the board as connected, and build a reader
-          # thread around nil.  The thread died in UART.open, nothing
-          # joined it, and the run went its full duration and reported
-          # "ok=0 ... tx-rate=NaN" -- indistinguishable from a board that
-          # is up and saying nothing, which is the one question 'connect'
-          # exists to answer.
+          # simply slower to enumerate than --warm-up allowed.  Said, and
+          # counted as a failure: a board that cannot be read must not
+          # look like one that is up and saying nothing, which is the one
+          # question 'connect' exists to answer.
           dev_tty = console(hopts)
           if dev_tty.nil?
             where = hopts[:usb] || "probe #{hopts[:serial] || '(no serial)'}"
@@ -198,9 +187,8 @@ class Connect < CLI::Command
         end
 
         # The interesting output is often below the firmware's compiled-in
-        # log level, and spank can be turned up at run time -- but only by
-        # someone who can type at the shell, which until now nothing here
-        # could do.  Written on a second, write-only handle: the reader
+        # log level, and spank can be turned up at run time, by typing at
+        # the shell.  Written on a second, write-only handle: the reader
         # thread already holds the port, and sharing one IO across threads
         # for opposite directions is a race waiting for a long bench run.
         if (cmd = opts[:command])
@@ -236,13 +224,11 @@ class Connect < CLI::Command
 
     # Read one board's console until the run ends, and say how it went.
     #
-    # The SUMMARY used to come from an ensure, whatever ended the
-    # thread: a console that would not open (permission, busy, gone) or
-    # a read that failed on unplug, or a tally that raised, left
-    # '<A1> SUMMARY: lines=0' on stdout and a thread trace on stderr --
-    # a board that was never read, reported as one that said nothing.
-    # Now it says ERROR on stdout, where a capture keeps it, gives no
-    # SUMMARY, and the run exits 1.
+    # A console that will not open (permission, busy, gone), a read that
+    # fails on unplug, or a tally that raises ends the reader with an
+    # ERROR line on stdout, where a capture keeps it, and no SUMMARY: a
+    # summary of a board never read would read as one that said
+    # nothing.  The run then exits 1.
     def read_console(name, dev_tty, counter)
         failed = false
         UART.open dev_tty, @cli.baud(name) do |serial|
@@ -266,12 +252,10 @@ class Connect < CLI::Command
 
     # Stdin to the board, a line at a time.
     #
-    # On a second, write-only handle for the same reason --command
-    # uses one: the reader thread holds the port, and one IO shared
-    # across two threads for opposite directions is a race waiting for
-    # a long bench run.  What comes back is printed by that thread,
-    # prefixed like everything else, so the answer to what was typed
-    # appears where the rest of the board's output does.
+    # On a second, write-only handle, as --command is.  What comes back
+    # is printed by the reader thread, prefixed like everything else, so
+    # the answer to what was typed appears where the rest of the board's
+    # output does.
     #
     # Lines, not characters: the shell on the far end wants a complete
     # line terminated by \r, and there is nowhere here to run a line

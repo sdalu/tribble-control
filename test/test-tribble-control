@@ -12,28 +12,21 @@
 # tests power the ports of the boards they name UP, which is the benign
 # direction and what those commands do anyway.
 #
-# What it covers, and why each is here: every one of these was a live
-# defect fixed on 2026-09-16, and none of them had a test.
+# What it covers, and what each guard prevents:
 #
-#   missing port      an entry with no port used to make 'usb off' raise
-#                     KeyError and take every power-down with it
-#   duplicate port    a reassigned port left on the old entry addressed
-#                     one board under the other's interface and baud
-#   port = none       a retired entry must be invisible to selection but
-#                     still nameable, with an error that says which
-#   quoted port       port = '8' loaded, counted as present, then made
-#                     the whole tool unusable with "port out of range"
-#   falsey key        attribute() returned its default for a key set to
-#                     false, so 'port = none' read as present
-#   flash/reset exit  each_device ran its jobs in forked processes, so the
-#                     parent's accumulator stayed empty, [].all? was true,
-#                     and both commands exited 0 however many boards had
-#                     failed.  reset from the day it was written
-#   no board          a declared port with nothing on it gave usb_to_tty
-#                     nil, which reached a reader thread that died
-#                     unjoined: the run went its full duration and
-#                     reported ok=0, tx-rate=NaN, which reads exactly like
-#                     a board that is up and silent
+#   missing port      an entry with no port is refused at load, not a
+#                     KeyError that takes every power-down with it
+#   duplicate port    two entries on one port would address one board
+#                     under the other's interface and baud
+#   port = none       a record is invisible to selection but still
+#                     nameable, with an error that says which
+#   quoted port       port = '8' is the number 8, not a string that
+#                     leaves the board "out of range"
+#   falsey key        a key set to false means false, not the default
+#   flash/reset exit  a failed board makes the command exit 1: the jobs
+#                     run in threads, whose results reach the fold
+#   no board          a declared port with nothing on it is reported, not
+#                     captured as a board that is up and silent
 #
 # Usage: sh test-tribble-control HOST [tribble-control-path] [tally-path]
 #    or: TRIBBLE_HOST=<host> sh test-tribble-control
@@ -173,12 +166,11 @@ say "a type is not a device" \
 
 # The openocd gate.
 #
-# Every command that reaches a board shells out to openocd, and until
-# 2026-09-17 a missing or mistyped one was Errno::ENOENT out of Open3 --
-# once per board, from inside the thread pool, after the ports had been
-# powered up and the warm-up slept through. flash and reset now check
-# for it before switching anything. Nothing here touches the hub: the
-# check happens before the first command is sent.
+# Every command that reaches a board shells out to openocd.  flash and
+# reset check for it before switching anything, so a missing or
+# mistyped one is named once, not met as Errno::ENOENT once per board
+# from inside the thread pool.  Nothing here touches the hub: the check
+# happens before the first command is sent.
 say "a missing openocd is named, not ENOENT" \
     "openocd not found at '/tmp/no-such-openocd'" \
     "$tc -C $cfg --openocd=/tmp/no-such-openocd reset DB"
@@ -202,18 +194,19 @@ status "a --require'd file loads" 0 "$tc -C $cfg -r /tmp/t-tally.rb usb status"
 
 # The exit status of flash and reset.
 #
-# Both fold over what each_device returns, and each_device used to run
-# its jobs with Parallel.map's default in_processes: the children pushed
-# their results into their own copy of the parent's accumulator, so the
-# fold saw [], [].all? is true, and the command exited 0 however many
-# boards had failed.  reset was affected from the day it was written and
-# flash from the day serial became its default.  Nothing here touches a
-# board: the firmware does not exist, and the bogus serial means openocd
-# never finds an adapter to talk to.
-status "flash exits 1 when the firmware is missing" 1 \
-       "$tc -C $cfg flash /tmp/tribble-test-no-such.hex DB"
+# Both fold over what each_device returns, which only works because the
+# jobs run in threads: forked children would return their results to
+# their own copy of the accumulator, the fold would see [], and the
+# command would exit 0 however many boards had failed.  Nothing here
+# touches a board: the bogus serial means openocd never finds an adapter
+# to talk to.  The firmware exists (empty) so that flash gets past its
+# own check and reaches openocd; a missing one is refused before that.
 ssh -o BatchMode=yes "root@$host" \
-    "sed 's/000760103710/000000000000/' $cfg > /tmp/t-badserial.conf"
+    "sed 's/000760103710/000000000000/' $cfg > /tmp/t-badserial.conf; : > /tmp/t-empty.hex"
+status "flash exits 1 when the probe cannot be found" 1 \
+       "$tc -C /tmp/t-badserial.conf flash /tmp/t-empty.hex DB"
+status "flash refuses a missing firmware" 1 \
+       "$tc -C $cfg flash /tmp/tribble-test-no-such.hex DB"
 status "reset exits 1 when the probe cannot be found" 1 \
        "$tc -C /tmp/t-badserial.conf reset DB"
 # The positive control.  Without it the two tests above would pass on a
@@ -225,11 +218,10 @@ status "reset exits 0 on a board it can reach" 0 \
 
 # A declared port with no board on it.
 #
-# usb_to_tty returns nil there.  That nil used to be carried into a
-# reader thread that died in UART.open with nothing joining it, so the
-# run went its full duration and reported ok=0, tx-rate=NaN, which reads
-# as "the board is up and saying nothing" -- the one thing connect exists
-# to answer.  Port 11 is declared by nothing and has no board.
+# usb_to_tty returns nil there, and connect says so instead of reading a
+# board that is not there and reporting it as up and saying nothing --
+# the one thing connect exists to answer.  Port 11 is declared by nothing
+# and has no board.
 ssh -o BatchMode=yes "root@$host" \
     "printf 'X9 {\\n  interface = jlink\\n  baud = 115200\\n  port = 11\\n}\\n' | cat $cfg - > /tmp/t-empty.conf"
 say "a port with no board is reported, not captured silently" \
@@ -246,17 +238,17 @@ say "a port with no board is reported, not captured silently" \
 # unless it is already erased, and erases again afterwards.  No firmware
 # is overwritten.
 #
-# What it is for: the post-flash power cycle used to call @exsys.off()
-# with a raw port and no gate, so a board declared on a protected port had
-# its VBUS cut for two seconds after every flash, with no --force and no
-# way to say no.  Ports 12-15 feed the Raspberry Pis.
+# What it is for: the post-flash power cycle goes through the protection
+# gate, so a board declared on a protected port keeps its VBUS after a
+# flash -- the cycle is skipped and said -- unless --force.  Ports 12-15
+# feed the Raspberry Pis.
 # The devnum of a board, waiting for it to enumerate.
 #
 # A power cycle ends with the port on, but the board is not back the
 # instant the command that cut it returns: it has to re-enumerate, and
-# until it does the sysfs node is absent. Reading it straight away
-# raced and lost -- and since `set -e` is on and this is an assignment
-# from a command substitution, the failure took the whole run down
+# until it does the sysfs node is absent.  Reading it straight away
+# races -- and since `set -e` is on and this is an assignment from a
+# command substitution, a lost race would take the whole run down
 # before the gate could erase what it had just written.
 devnum_of () {  # devnum_of <sysfs-path>
     ssh -o BatchMode=yes "root@$host" "
@@ -282,11 +274,10 @@ if [ -n "${TRIBBLE_TEST_FLASH:-}" ]; then
     else
         # Erase on the way out, however we leave.
         #
-        # The test's safety used to rest on reaching its last lines:
-        # everything between writing the marker and erasing it had to
-        # succeed, or the board kept a page of DEADBEEF. It did happen
-        # -- the devnum race above took the run down in between. What
-        # keeps a board clean cannot be the happy path.
+        # The test's safety must not rest on reaching its last lines:
+        # anything failing between writing the marker and erasing it
+        # would leave the board a page of DEADBEEF.  What keeps a board
+        # clean cannot be the happy path.
         restore_db () {
             ocd "$dbserial" "flash erase_address $page 0x1000" >/dev/null 2>&1 || true
             ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-marker.hex' 2>/dev/null || true
@@ -341,5 +332,5 @@ else
     echo "skip  power-cycle gate (TRIBBLE_TEST_FLASH=1 to run it; it writes flash)"
 fi
 
-ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf /tmp/t-tally.rb'
+ssh -o BatchMode=yes "root@$host" 'rm -f /tmp/t-*.conf /tmp/t-tally.rb /tmp/t-empty.hex'
 [ "$fail" -eq 0 ] && echo "all tribble-control tests passed" || { echo "$fail failed"; exit 1; }

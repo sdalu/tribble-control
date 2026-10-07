@@ -162,10 +162,10 @@ class TestDevice < Minitest::Test
         assert_equal [ 'A1' ], cli.devices
     end
 
-    # UCL hands back an Integer for an unquoted all-digit serial, and
-    # that used to be refused as "must name one hub" -- a poor answer
-    # to a file that had named one.  J-Link serials are all digits, so
-    # the shape is not hypothetical.
+    # UCL hands back an Integer for an unquoted all-digit serial, which
+    # must not be refused as "must name one hub": the file has named
+    # one.  J-Link serials are all digits, so the shape is not
+    # hypothetical.
     def test_an_unquoted_all_digit_serial_is_a_serial
         with_host([ { :device => '/dev/ttyUSB4', :serial => '12345678',
                       :usb_path => '1-4' } ]) do
@@ -210,8 +210,8 @@ class TestDevice < Minitest::Test
         end
     end
 
-    # The silent coin toss: three FTDI adapters, and the tool used to
-    # take whichever the host enumerated first and switch its ports.
+    # No silent coin toss: with three FTDI adapters, taking whichever
+    # the host enumerated first could switch somebody else's ports.
     def test_several_candidates_are_refused_by_name
         with_host do
             msg = refusal_for(CONFIG, device: nil)

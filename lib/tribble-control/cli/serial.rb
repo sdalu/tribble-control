@@ -6,28 +6,19 @@ class CLI
 class Serial < CLI::Command
     DESCRIPTION = "Report a debug probe's serial number"
 
-    # 'usb' only, and that is the point of the rewrite.  This command
-    # used to run openocd, which cannot choose between several adapters
-    # ("Multiple devices found, specify the desired device"), so it had
-    # to select with 'power': every port off, one back on, for each
-    # board in turn.  Asking a board which serial it has should not
-    # black out the bench, and reading the USB descriptor does not.
-    # usb first, so it stays the default where it works: it reads the
-    # descriptor of one named board and disturbs nothing else.
+    # usb first, so it is the default: it reads the USB descriptor of
+    # one named board and disturbs nothing else.  Asking a board which
+    # serial it has should not black out the bench.
     #
-    # power is the one that needs no USB topology, and so the one a
-    # FreeBSD host can use.  It identifies a board by being the only
-    # one powered, which is what this command needs and all it needs --
-    # the probe on that board is then the only probe present, and it
-    # reports its own serial.  It costs a power cycle of the whole
-    # bench and leaves it off; see DEVICE SELECTION.
+    # power needs no USB topology.  It identifies a board by its being
+    # the only one powered -- the probe on it is then the only probe
+    # present, and reports its own serial -- at the cost of a power
+    # cycle of the whole bench, left off; see DEVICE SELECTION.
     Methods  = [ 'usb', 'power' ]
     Defaults = {}
     Parser   = OptionParser.new do |opts|
-        # Usage
         opts.banner = "Usage: #{PROGNAME} serial [options] [PORT|DEVNAME]..."
 
-        # Description
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''
@@ -37,10 +28,9 @@ class Serial < CLI::Command
         return Platform.usb_to_serial(hopts[:usb]) if hopts[:usb]
 
         # --method power: this board is the only one powered, so the
-        # only probe enumerated is its own.  More than one means the
-        # premise is false -- a probe on a port the configuration protects
-        # stays powered whatever we do -- and the honest answer is to
-        # say so rather than pick one and call it this board's.
+        # only probe enumerated is its own.  each_device has already
+        # refused more than one (CLI#only_probe!); the case below is
+        # the same rule kept where the answer is read.
         probes = Platform.probe_consoles.keys
         case probes.size
         when 1 then probes.first

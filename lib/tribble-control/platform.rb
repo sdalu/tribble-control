@@ -1,16 +1,14 @@
 #
 # Host-specific ways of finding the boards: their probes, their
 # consoles, and their place in the USB tree.  Finding the HUB is each
-# Hub backend's own (Hub::ExSYS.open, through the exsys gem).
+# Hub backend's own (Hub::ExSYS.open, through the exsys gem), and so is
+# its geometry, which socket a port is (Hub#usb_path).
 #
 require 'rbconfig'
 require 'shellwords'
 
 module TribbleControl
 
-#
-# Sysctl quick parsing
-#
 module Platform
 
 # Vendor ids of the debug probes a bench carries: NXP/mbed for DAPLink
@@ -18,13 +16,6 @@ module Platform
 # Both present their console as a CDC interface reporting the PROBE's
 # own serial, which is what makes a serial the key to a console.
 PROBE_VENDORS = %w[0d28 1366].freeze
-
-# Finding the HUB is not here: that is the Hub backend's, and for the
-# ExSYS hub it is the exsys gem's, which knows what a hub's control
-# adapter is because it knows the hub.  Nor is the hub's geometry --
-# which socket a port is -- which is Hub#usb_path.  What is here is
-# finding the BOARDS -- their probes, their consoles, their place in
-# the USB tree -- which is this tool's own business and no gem's.
 
 module FreeBSD
     # The sysctl branches that describe the USB bus.
@@ -58,9 +49,8 @@ module FreeBSD
             next unless self.probe?(dev)
             # No ttyname, no console.  '/dev/tty' + '' is /dev/tty --
             # the controlling terminal -- so an entry whose tty is not
-            # named yet used to map a probe's serial to the operator's
-            # own screen, which connect would then open and read as if
-            # it were a board.
+            # named yet would map a probe's serial to the operator's own
+            # screen, for connect to read as if it were a board.
             next if dev[:ttyname].to_s.empty?
             [ dev.dig(:'%pnpinfo', :sernum), '/dev/tty' + dev[:ttyname].to_s ]
         }.to_h
@@ -223,12 +213,11 @@ module Linux
 
     # The probe's serial, from the USB descriptor the kernel already has.
     #
-    # This used to be asked of openocd, which no longer answers. 0.12.0
-    # prints neither the CMSIS-DAP "Serial# =" line nor a J-Link "S/N",
-    # at any debug level, and 0.12.0 is still the current release, so
-    # there is no version to upgrade to. Reading the descriptor needs no
-    # SWD session, no openocd, and above all no powering the rest of the
-    # bench down to leave one adapter for openocd to find.
+    # Not asked of openocd: 0.12.0, the current release, prints neither
+    # the CMSIS-DAP "Serial# =" line nor a J-Link "S/N", at any debug
+    # level.  Reading the descriptor needs no SWD session, no openocd,
+    # and above all no powering the rest of the bench down to leave one
+    # adapter for openocd to find.
     #
     # An MDK puts its own hub in front of its DAPLink, so the probe sits
     # one level below the hub port there while a J-Link sits on it; look
@@ -246,9 +235,6 @@ module Linux
         nil
     end
 
-    # private on its own does nothing here: this module has no instance
-    # methods, and it never applied to a def self. singleton method.
-    # udevadm_query was public for as long as it has existed.
     private_class_method def self.udevadm_query(path)
         `/usr/bin/udevadm info -q property --export #{Shellwords.escape(path)}`
           .lines.to_h {|l| l.split('=', 2) }

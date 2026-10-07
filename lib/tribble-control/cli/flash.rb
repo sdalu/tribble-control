@@ -9,28 +9,24 @@ class Flash < CLI::Command
     # Every board goes through openocd: check for it up front.
     OPENOCD     = true
 
-    # 'serial' first, so it is the default (Methods.first).  'power'
-    # was, and it cuts every port and re-powers one board at a time: the
-    # whole bench in sequential rounds, left powered down at the end.
-    # Selecting by adapter serial needs serial= on every board, which the
-    # configuration now has, and it was measured on 2026-09-16 rather than
-    # assumed: with all four J-Links live, a flash addressed by serial
-    # landed on the board whose FICR.DEVICEID matched and left its
-    # neighbours' flash byte-for-byte unchanged, and the configuration's
-    # power_cycle = after-flash still fired.  'power' stays for a board
-    # whose serial is missing or wrong.
+    # 'serial' first, so it is the default (Methods.first): boards stay
+    # powered and are flashed in parallel.  It needs serial= on every
+    # board, and it was measured on 2026-09-16 rather than assumed: with
+    # all four J-Links live, a flash addressed by serial landed on the
+    # board whose FICR.DEVICEID matched and left its neighbours' flash
+    # byte-for-byte unchanged, and power_cycle = after-flash still
+    # fired.  'power' -- every port cut, one board powered at a time,
+    # the bench left off -- is for a board whose serial is missing or
+    # wrong.
     Methods  = [ 'serial', 'power' ]
     Defaults = {}
     Parser   = OptionParser.new do |opts|
-        # Usage
         opts.banner = "Usage: #{PROGNAME} flash [options] FIRMWARE [PORT|DEVNAME]..."
 
-        # Description
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''
 
-        # Options
         opts.separator 'Options:'
         opts.on '--power-cycle', 'Power the port off and on again after a',
                                  'successful flash, whatever the configuration',
@@ -45,10 +41,10 @@ class Flash < CLI::Command
 
     def run(argv, **opts)
         firmware = argv.shift
-        # Checked before any port is switched.  A typo used to be found
-        # by openocd, once per board -- under --method power, after the
-        # whole bench had been cut and cycled.  openocd resolves the
-        # path against the current directory, as File.file? does.
+        # Checked before any port is switched, not left to openocd once
+        # per board -- under --method power, after the whole bench has
+        # been cut.  openocd resolves the path against the current
+        # directory, as File.file? does.
         raise Error, 'flash: FIRMWARE missing' if firmware.nil?
         unless File.file?(firmware) && File.readable?(firmware)
             raise Error, "flash: no readable firmware file '#{firmware}'"

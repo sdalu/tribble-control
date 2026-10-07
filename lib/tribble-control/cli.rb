@@ -17,7 +17,7 @@ require_relative 'hub/exsys'
 module TribbleControl
 
 class CLI
-    # Command line error reporting
+    # An operator's error: CLI.run prints its message alone and exits 1.
     class Error < StandardError
     end
 
@@ -43,7 +43,8 @@ class CLI
         end
     end
 
-    # Command class inheritance
+    # The base of every command.  A subclass is found by CLI.commands
+    # and run with the CLI it was parsed by.
     class Command
         extend Forwardable
 
@@ -63,13 +64,12 @@ class CLI
             end
         end
 
-        # Initializer
         def initialize(cli)
             @cli  = cli
         end
     end
 
-    # configuration block gathering everything that keeps a port powered.
+    # The configuration block gathering everything that keeps a port powered.
     #
     # Two rules, one key.  'undeclared' says whether a port the file
     # does not mention is protected -- yes, the default, is what keeps
@@ -85,12 +85,8 @@ class CLI
     # entry -- a power feed nothing drives, which is most of what ends
     # up here.
     #
-    # They were two top-level keys, 'undeclared' and 'reserved', which
-    # left 'protected' -- the word 'usb status' prints, and the one the
-    # manual gives a section to -- naming neither of them.  One key is
-    # what the docs already called the pair, and the whole policy is
-    # then read in one place rather than in two lines that have to be
-    # found first.
+    # One block, so the whole policy is read in one place, under the
+    # word 'usb status' prints and the manual gives a section to.
     PROTECT_KEY            = 'protect'
     PROTECT_UNDECLARED_KEY = 'undeclared'
     PROTECT_PORTS_KEY      = 'ports'
@@ -98,13 +94,11 @@ class CLI
     PROTECT_KEYS           = [ PROTECT_UNDECLARED_KEY, PROTECT_PORTS_KEY,
                                PROTECT_NODES_KEY ].freeze
 
-    # What the block replaced, and how each is written now.
-    #
-    # A configuration from before the change is met with its new spelling.
-    # Without this 'reserved' falls through to the device pass and is
-    # refused as "configuration entry 'reserved' has no port" -- true, and no
-    # help at all, since the port line it asks for would load the file
-    # and leave every port it named switchable.
+    # Top-level keys that belong inside 'protect', each with the line to
+    # write instead.  Left to the device pass, 'reserved' would be refused
+    # as "configuration entry 'reserved' has no port" -- and the port
+    # line that asks for would load the file with every port it named
+    # switchable.
     PROTECT_FORMER = {
         'reserved'   => "#{PROTECT_KEY} { #{PROTECT_PORTS_KEY} = [ ... ] }",
         'undeclared' => "#{PROTECT_KEY} { #{PROTECT_UNDECLARED_KEY} = yes|no }"
@@ -132,8 +126,7 @@ class CLI
     # every board of that kind is the same board.
     TYPE_FORBIDDEN = [ 'port', 'serial' ].freeze
 
-    # Top-of-file configuration key: the serial line of the hub this file
-    # describes.
+    # Top-of-file configuration key: which hub this file describes.
     #
     # A configuration is one bench, and a bench is one hub, so the file
     # that says which board is on which port is the right place to say
@@ -146,10 +139,9 @@ class CLI
     # -d still wins, for the one-off: a hub that has moved, or a line
     # reached through something other than the usual node.
     #
-    # The value is an FT232 serial, a USB path (1-1.2.4.4), or a device
-    # node when it has a '/' in it.  See Hub::ExSYS.open for which to
-    # write in a file that gets deployed, and why the node is the wrong
-    # one.
+    # What the value may be depends on the kind of hub: see
+    # Hub::ExSYS.open and Hub::USB.open, and why a device node or a ugen
+    # name is the wrong thing to write in a file that gets deployed.
     DEVICE_KEY     = 'device'
 
     # Top-of-file configuration key: which KIND of hub the file describes.
@@ -209,7 +201,6 @@ class CLI
     # the current directory only.
     DEFAULT_CONFIG = 'tribble-control.conf'
 
-    # Parser
     Defaults     = { :'warm-up' => 5,
                      :openocd   => '/usr/bin/openocd' }
     GlobalParser = OptionParser.new do |opts|
@@ -246,7 +237,6 @@ class CLI
         end
 
 
-        # Options
         opts.separator ''
         opts.separator 'Informative options:'
         opts.on '-h', '--help',         "Show this message" do
@@ -270,9 +260,7 @@ class CLI
         end
     end
 
-    # Where the manual lives.  It sat after __END__ while tribble-control
-    # was a single script; lib/ is required rather than run, so DATA is
-    # not defined there and the page is a file shipped beside the code.
+    # Where the manual lives: a file shipped beside the code.
     #
     # man/man1/ rather than man/: that shape is a MANPATH entry as it
     # stands, so `MANPATH=<gem>/man man tribble-control` works on an
@@ -341,7 +329,6 @@ class CLI
 
     PROGNAME = GlobalParser.program_name
 
-    # Command list
     def self.commands
         CLI::Command.subclasses.to_h {|k| [ k.cmdname, k ] }
     end
@@ -351,18 +338,15 @@ class CLI
         self.commands.find {|n,_k| n == name }&.last
     end
 
-    # Run the command line
+    # Run the command line.
     #
-    # Commands that report per-device success (flash, reset, serial)
-    # return false if any device failed; that becomes exit status 1.
-    # Hub::Error is in the list because the hub layer is ours to report
-    # on, not to leak: a backend raises it both for a hub that refuses
-    # a command (E01 on a wrong password) and for a host it cannot look
-    # for a hub on (no udevadm, an unsupported platform).  Both are
-    # operator errors with nothing to debug, and both used to reach
-    # exe/tribble-control's catch-all instead -- which prints the same
-    # line, so nothing was visibly wrong, but it is the net under the
-    # trapeze and not the trapeze.  A library caller of CLI.run got the
+    # Commands that report per-device success (flash, reset, serial,
+    # connect) return false if any device failed; that becomes exit
+    # status 1.  Hub::Error is caught here because the hub layer is ours
+    # to report on, not to leak: a backend raises it both for a hub that
+    # refuses a command (E01 on a wrong password) and for a host it
+    # cannot look for a hub on.  Both are operator errors with nothing
+    # to debug, and a library caller of CLI.run gets the line, not a
     # backtrace.
     def self.run(argv = ARGV)
         self.new.parse(argv).run.tap {|ok| exit 1 if ok == false }
@@ -382,7 +366,6 @@ class CLI
     # the host was found to have.
     attr_reader :device
 
-    # Initializer
     def initialize
         @device             = nil
         @hub_kind           = HUB_DEFAULT
@@ -393,10 +376,8 @@ class CLI
         @protect_undeclared = true
         @tally_default      = TALLY_DEFAULT
         @types              = {}
-        # :info, not :debug.  This was built at :debug, which made
-        # --debug a flag that changed nothing -- the openocd command
-        # lines it is supposed to reveal were printed on every run
-        # whether it was given or not.
+        # :info; --debug replaces it with a :debug logger (see #parse),
+        # which is what shows the openocd command lines.
         @tty     = TTY::Logger.new do |config|
             config.level = :info
         end
@@ -404,16 +385,16 @@ class CLI
 
     # A port number, decimal whatever it looks like.
     #
-    # Integer() reads a leading 0 as octal, so '010' was port 8 and
-    # '08' an ArgumentError: 'usb off 010' cut port 8, and a quoted
-    # 'protect { ports = [ "010" ] }' protected port 8 and left 10
-    # switchable.  An unquoted 010 never did this -- UCL hands back 10
-    # -- which is why only a string goes through base 10.
+    # Integer() reads a leading 0 as octal: '010' would be port 8 and
+    # '08' an ArgumentError, on the command line and in a quoted
+    # 'protect { ports = [ "010" ] }' alike.  UCL already hands back an
+    # unquoted 010 as 10, so only a string goes through base 10.
     def self.port_number(v)
         v.is_a?(String) ? Integer(v, 10) : Integer(v)
     end
 
-    # Translate a port/name to a port identier
+    # A board's name and port, from either.  KeyError when neither is
+    # in the configuration.
     def name_port(id)
         case id
         when /^\d+$/
@@ -452,11 +433,9 @@ class CLI
 
     # Read an arbitrary key of a device (by port number or name)
     #
-    # The default applies when the key is ABSENT, not when it is falsey.
-    # This used to end `entry&.dig(key) || default`, which handed back
-    # the default for a key explicitly set to false: 'present = false'
-    # read as present, and so would 'power_cycle = false'. A key that is
-    # there means what it says.
+    # The default applies when the key is ABSENT, not when it is falsey:
+    # 'power_cycle = false' means false.  A key that is there means what
+    # it says.
     def attribute(id, key, default = nil)
         return default if @entries.nil?
         entry = case id
@@ -503,10 +482,10 @@ class CLI
     # been half a fix: a chip reached over JTAG takes the right target
     # script and then fails on a transport it does not have.
     #
-    # Read the way work_area is.  This used to be .to_s and nothing
-    # else, so 'None' and UCL's null -- which work_area takes as none --
-    # sent openocd 'transport select None' and 'transport select ', and
-    # 'no', a UCL boolean, sent 'transport select false'.
+    # Read the way work_area is: every spelling of none in any case, and
+    # UCL's null, mean none; anything that is not a name -- a boolean, a
+    # number, an empty string -- is refused rather than handed to openocd
+    # as 'transport select false'.
     def transport(id)
         v = self.attribute(id, 'transport', 'swd')
         return nil if PORT_NONE.include?(v.is_a?(String) ? v.downcase : v)
@@ -577,10 +556,7 @@ class CLI
     # Everything that walks the bench goes through here, so leaving an
     # absent board out in one place keeps it out of all of them: it is
     # not switched, not flashed, not connected to, and not counted among
-    # the ports #switchable may power down.  That last one used to raise
-    # KeyError instead: an entry with no port, which is the natural way
-    # to write down a board that is gone, made name_port() fail and took
-    # every 'usb off' with it.
+    # the ports #switchable may power down.
     def devices
         (@entries&.keys || []).select {|n| self.present?(n) }
     end
@@ -648,9 +624,7 @@ class CLI
     # turn-by-turn off of --method power, the cycle a board's
     # power_cycle key asks for after a flash -- so a protected port is a
     # reason to skip the step and say so, not to abort an operation that
-    # has already succeeded.  Both used to call @hub.off() with a raw
-    # port and no gate at all, which made them the two paths where the
-    # manual's "never one the devlist reserves" was not true.
+    # has already succeeded.
     def offable?(port, force: @opts[:force])
         force || self.switchable.include?(port)
     end
@@ -699,17 +673,11 @@ class CLI
         name_port_list = (ids.empty? ? self.devices : ids)
                            .to_h {|id| self.name_port(id) }
 
-        # An empty selection is refused, not carried through.
-        #
-        # It is reachable: naming no device on a configuration whose every
-        # entry says 'port = none' selects nothing, and each of the
-        # three methods below then did something worse than nothing
-        # with it.  --method serial splatted the empty list into
-        # @hub.on(), and on/off/toggle read "no ports named" as
-        # "every port", so selecting no board powered all sixteen up
-        # and then reported success for the nought boards it flashed.
-        # --method power was worse: it powered the whole bench DOWN,
-        # looped over nothing, and left it off.
+        # An empty selection is refused, not carried through.  It is
+        # reachable -- no device named, on a configuration whose every
+        # entry says 'port = none' -- and every method below would do
+        # worse than nothing with it: --method power would cut the whole
+        # bench and loop over no board.
         #
         # Every other splat into the hub in this program is safe by
         # construction -- offable() either returns a non-empty list or
@@ -740,17 +708,12 @@ class CLI
           sleep(@opts[:'warm-up'])
 
           @tty&.info "Parallelizing jobs"
-          # in_threads, not the default.  Parallel.map with no option
-          # runs in_processes: the children fork, run this block, and
-          # push their results into their OWN copy of the accumulator
-          # that Enumerable#map made in the parent.  The parent's copy
-          # stays empty, so every caller that folds over the result --
-          # Flash#run and Reset#run both end with .all?(&:itself) -- was
-          # folding over [], which is true, and the command exited 0
-          # however many boards had failed.  The work here is
-          # Open3.capture2e on openocd, which releases the GVL for its
-          # whole duration, so threads keep the parallelism and keep the
-          # block in the parent's memory where its results can be seen.
+          # in_threads, not the default in_processes: forked children
+          # return their results to their own copy of the accumulator,
+          # so Flash#run's .all?(&:itself) would fold over [] and exit 0
+          # however many boards failed.  The work is openocd under
+          # Open3.capture2e, which releases the GVL, so threads keep the
+          # parallelism.
           Parallel.map(name_port_list.keys,
                        in_threads: [ name_port_list.size, 1 ].max) do |name|
               block.call(name, serial: self.serial(name),
@@ -785,13 +748,10 @@ class CLI
             # A2's probe path, A1's probe path, either of their hub
             # paths, and a location that does not exist at all, it
             # answered with the same chip every time (FICR.DEVICEID
-            # 5765c939, A2).  So this method disambiguated nothing, and
-            # 'connect --reset' with several MDKs powered reset whichever
-            # board openocd enumerated first while reporting success for
-            # each.  'adapter serial' does work -- that is what 'flash'
-            # relies on -- so pass it and let the location stand as the
-            # documentation of intent it has turned out to be.  A board
-            # with no serial= behaves exactly as before.
+            # 5765c939, A2).  'adapter serial' does select -- that is
+            # what 'flash' relies on -- so it is passed, and the location
+            # stays as a statement of intent.  A board with no serial=
+            # reaches whichever probe openocd enumerates first.
             block.call(name, usb: usb, serial: self.serial(name),
                              interface: self.interface(name),
                              target: self.target(name),
@@ -860,15 +820,12 @@ class CLI
                      ' those down too'
     end
 
-    # The openocd binary, resolved and checked once.
-    #
-    # Without this the first sign of a missing or mistyped --openocd is
-    # Errno::ENOENT out of Open3 -- once per board, raised from inside
-    # the thread pool, after the ports have been powered up and the
-    # warm-up slept through.  A name with no separator in it is looked
-    # up in PATH, which is what makes --openocd=openocd work on a host
-    # that keeps it somewhere other than /usr/bin (FreeBSD: it is under
-    # /usr/local).
+    # The openocd binary, resolved and checked once, before a port is
+    # switched; otherwise a mistyped --openocd surfaces as Errno::ENOENT
+    # once per board, from inside the thread pool.  A name with no
+    # separator in it is looked up in PATH, which is what makes
+    # --openocd=openocd work on a host that keeps it somewhere other
+    # than /usr/bin (FreeBSD: it is under /usr/local).
     def openocd_path
         @openocd_path ||= begin
             path  = @opts[:openocd].to_s
@@ -913,15 +870,11 @@ class CLI
       ok
     end
 
-    # The hub's control line, from what -d or the configuration named, or
-    # from the host when neither named anything.
-    #
-    # Argument parsing
+    # Parse +argv+: global options, -r files, the command and its
+    # options, the configuration, then the hub.  Returns self.
     def parse(argv)
-        # Parsed option holder
         opts = {}.merge(Defaults)
 
-        # Parse global options
         # -r given twice loads both files: it is how each tally reaches
         # the tool, and a second -r that silently dropped the first would
         # surface only as an unknown tally, far from its cause.
@@ -950,13 +903,11 @@ class CLI
             end
         end
 
-        # Check for command processor class
         cmdname = argv.shift
         raise Error, "command missing" if cmdname.nil?
         cmdk    = CLI.find_command_class(cmdname)
         raise Error, "command '#{cmdname}' is not recognized" if cmdk.nil?
 
-        # Parse command, and run it
         if cmdk.const_defined?(:Defaults)
             opts.merge!(cmdk::Defaults) {|_k, o, _n| o }
         end
@@ -978,9 +929,6 @@ class CLI
             end
         end
 
-
-        # Config
-        #
         # -C names the file outright.  Without it, a configuration
         # named 'tribble-control.conf' in the current directory is used
         # as though it had been given; neither the home directory nor
@@ -994,8 +942,8 @@ class CLI
             raise Error, "file #{file} doesn't exist" unless File.exist?(file)
             raw = UCL.load_file(file)
 
-            # The keys the 'protect' block replaced, caught before the
-            # device pass can take them for boards.
+            # Top-level keys that belong in the 'protect' block, caught
+            # before the device pass can take them for boards.
             if (former = raw.keys & PROTECT_FORMER.keys).any?
                 raise Error, former.map {|k|
                     "'#{k}' is no longer a configuration key:" \
@@ -1053,17 +1001,13 @@ class CLI
             # cannot: every port number in it belongs to one hub.
             #
             # Integer is accepted because UCL hands one back for an
-            # unquoted all-digit serial, which is a serial like any
-            # other and was refused as "must name one hub" -- a poor
-            # answer to a file that had named one.
-            #
-            # It is accepted and not fixed, because it CANNOT be fixed
-            # here: UCL has already parsed 00760040233 as the number
-            # 760040233 and the leading zeros are gone before this sees
-            # it.  Such a serial is looked up as written in the file
-            # minus its zeros, fails, and the refusal lists what the
-            # host really has -- which is the moment to quote it.  The
-            # docs say to quote a serial for this reason.
+            # unquoted all-digit serial.  It is not fixed, because it
+            # CANNOT be fixed here: UCL has already parsed 00760040233
+            # as the number 760040233, and the leading zeros are gone
+            # before this sees it.  Such a serial is looked up without
+            # its zeros, fails, and the refusal lists what the host
+            # really has -- which is the moment to quote it.  The docs
+            # say to quote a serial for this reason.
             if raw.include?(DEVICE_KEY)
                 dev = raw[DEVICE_KEY]
                 unless [ String, Symbol, Integer ].any? {|k| dev.is_a?(k) }
@@ -1138,15 +1082,11 @@ class CLI
                                  " '#{PORT_KEY} = none' if the board is no" \
                                  ' longer on the bench'
                 end
-                # Normalise it here, once, so port_of() is the only place
-                # that has to know what a port may look like.  It accepts
-                # a string, deliberately, but name_port(), serial() and
-                # attribute() all compare the RAW value against an
-                # integer id, so a configuration written port = '7' used to
-                # load, count as present, and then leave the board
-                # unswitchable with "port out of range (7)" and unnamed
-                # in 'usb status'.  nil here means none, which is what
-                # PORT_NONE already says.
+                # Normalised here, once, so port_of() is the only place
+                # that knows what a port may look like: name_port(),
+                # serial() and attribute() compare the stored value
+                # against an Integer, which port = '7' would never equal.
+                # nil means none.
                 entry[PORT_KEY] = self.port_of(name)
             end
 
@@ -1210,9 +1150,8 @@ class CLI
         # serial line for the whole of each call, the read-modify-write
         # of an on/off included, and that covers every process touching
         # the hub rather than only the tribble-control ones a lock file of
-        # ours could know about.  SerialisedHub did this job from the
-        # outside until exsys 1.0; nothing here needs a lock spanning
-        # two calls, and the one candidate -- the turn-by-turn cycling
+        # ours could know about.  Nothing here needs a lock spanning two
+        # calls, and the one candidate -- the turn-by-turn cycling
         # of --method power -- must not hold the line across its sleeps.
         kind     = opts.fetch(:hub, @hub_kind)
         settings = {}
@@ -1234,15 +1173,11 @@ class CLI
                                          **settings)
         @device = opts[:device] = @hub.to_s
 
-        # Debug, and the FILE it was documented to take.
-        #
-        # --debug[=FILE] accepted a filename and dropped it: the manual
-        # said so under TRAPS and nobody had made it true either way.
-        # It is honoured now -- the log goes to the terminal as before
-        # AND to the file, so a capture can be kept without watching it
-        # go past.  Opened before anything is switched, because finding
-        # out that a path is unwritable after a bench has been powered
-        # down is finding out too late.
+        # --debug[=FILE]: the log goes to the terminal and, given FILE,
+        # to the file as well, so a capture can be kept without watching
+        # it go past.  Opened before anything is switched: an unwritable
+        # path found after a bench has been powered down is found too
+        # late.
         if opts.include?(:debug)
             outputs = [ $stderr ]
             if (file = opts[:debug])
@@ -1256,25 +1191,20 @@ class CLI
                 outputs << @debug_io
             end
             # A new logger, not configure() on the old one: tty-logger
-            # 0.6 builds its handlers when the logger is constructed
-            # and #configure does not revisit the level, so the call
-            # that used to be here changed nothing whatever.
+            # 0.6 builds its handlers when the logger is constructed,
+            # and #configure does not revisit the level.
             @tty = TTY::Logger.new do |config|
                 config.level  = :debug
                 config.output = outputs
             end
         end
 
-        # Save parsing results
         @argv = argv
         @opts = opts
         @cmdk = cmdk
-
-        # Chainable
         self
     end
 
-    # Run command line
     def run
         return nil if @cmdk.nil?
 

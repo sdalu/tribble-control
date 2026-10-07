@@ -12,10 +12,8 @@ class Reset < CLI::Command
     Methods  = [ 'serial' ]
     Defaults = {}
     Parser   = OptionParser.new do |opts|
-        # Usage
         opts.banner = "Usage: #{PROGNAME} reset [options] [PORT|DEVNAME]..."
 
-        # Description
         opts.separator ''
         opts.separator "#{DESCRIPTION}."
         opts.separator ''

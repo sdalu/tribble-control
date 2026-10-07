@@ -74,8 +74,7 @@ class Tally
     def summary = "lines=#{@lines}"
 end
 
-# The default, and the only one this tool ships: a board printed this
-# many lines.
+# The default: a board printed this many lines.
 Tally.register(:lines) {|device| Tally.new(device) }
 
 # Counts nothing, says nothing: for a capture that wants the lines and

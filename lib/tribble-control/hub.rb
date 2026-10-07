@@ -8,11 +8,8 @@ module TribbleControl
 
 # What every kind of hub has to answer.
 #
-# The subject of this tool is a USB hub, and for its first releases it
-# was one hub in particular: the commands called ExSYS::ManagedUSB
-# directly, its sixteen-port constant was the definition of a port,
-# and its internal 4-by-4 geometry sat in Platform.  This class is the
-# seam that puts another kind of hub behind the same calls.  A backend
+# The subject of this tool is a USB hub, of more than one kind.  This
+# class is the seam that puts each kind behind the same calls.  A backend
 # is a subclass answering the methods below, and the commands,
 # each_device and the protections talk to nothing else.
 #

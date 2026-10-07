@@ -4,9 +4,8 @@ require_relative 'helper'
 
 # The configuration layer: what a configuration means, and what it refuses.
 #
-# Every one of these was a live defect or a rule the tool now depends
-# on, and all of them were decided before the hub object is used, so
-# none of them needs a hub.
+# All of it is decided before the hub object is used, so none of it
+# needs a hub.
 class TestConfig < Minitest::Test
     include ConfigHelper
 
@@ -127,8 +126,8 @@ class TestConfig < Minitest::Test
                      refusal_for("protect { undeclared = maybe }\nA1 { port = 1 }"))
     end
 
-    # 'port' for 'ports' was silently ignored, which reads in the file
-    # exactly like protection and is none.
+    # 'port' for 'ports', silently ignored, would read in the file
+    # exactly like protection and be none.
     def test_an_unknown_key_in_the_block_is_refused
         assert_match(/has no port key/,
                      refusal_for("protect { port = [ 13 ] }\nA1 { port = 1 }"))

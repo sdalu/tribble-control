@@ -15,7 +15,7 @@ require_relative '../lib/tribble-control/hub/usb'
 # and the fake is where the traps live -- the two power bits, the
 # doubled payload, the '<ERROR>' that exits 0.
 #
-# The host below is the bench this was written against: two root hubs,
+# The host below is a real bench, captured: two root hubs,
 # a Genesys USB 2 hub and a SuperSpeed one, and two TI TUSB8041s, the
 # second behind the first.
 class TestHubUSB < Minitest::Test

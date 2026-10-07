@@ -23,12 +23,11 @@ Gem::Specification.new do |spec|
     spec.license     = 'MIT'
     spec.homepage    = 'https://github.com/sdalu/tribble-control'
 
-    # Published on rubygems.org, and only there.  It used to be 'none':
-    # the gem drove one bench and was installed from a checkout.  That
-    # let a checkout build unreleased code under the last release's
-    # number -- 0.3.0 did it for a day -- which an exact version fetched
-    # from a registry cannot.  The cost is that a release cannot be
-    # taken back: a bad one is yanked, and its number is spent.
+    # Published on rubygems.org, and only there.  A version fetched from
+    # a registry names exactly one tree, which a checkout built under
+    # the last release's number does not.  The cost is that a release
+    # cannot be taken back: a bad one is yanked, and its number is
+    # spent.
     spec.metadata['allowed_push_host'] = 'https://rubygems.org'
     spec.metadata['source_code_uri']   = spec.homepage
     spec.metadata['rubygems_mfa_required'] = 'true'
@@ -59,24 +58,14 @@ Gem::Specification.new do |spec|
     spec.bindir      = 'exe'
     spec.executables = [ 'tribble-control' ]
 
-    # 1.2 or better.  0.6 gave ManagedUSB an exclusive lock on the
-    # serial line across a whole read-modify-write; 1.0 makes that
-    # session public, so the lock this program used to keep for itself
-    # is the library's job now, and refuses an empty port list instead
-    # of reading it as every port.  1.1 added `available`, which is how
-    # the hub is found and named here, and the USB path it reports is
-    # what --method usb builds a board's path from.
-    #
-    # The floor is 1.2 for the FreeBSD discovery fix, of which this
-    # tool is precisely the caller that gets hurt: before it, an
-    # adapter whose tty was not named yet came back as :device
-    # '/dev/tty' -- '/dev/tty' + '' -- and #hub_device takes a lone
-    # candidate without asking, so `usb off` on such a host would have
-    # written SP frames at the operator's own terminal.  1.2 also
-    # bounds the walk up the sysctl tree, which unbounded is a command
-    # that never returns and never says why, and it stops reporting a
-    # silent line as an Error carrying no message -- which is the whole
-    # of what CLI.run would print, at the moment the line went quiet.
+    # 1.2 or better, for what this tool relies on: an exclusive lock on
+    # the serial line across a whole read-modify-write, an empty port
+    # list refused rather than read as every port, `available` (how the
+    # hub is found and named, with the USB path --method usb builds on),
+    # and the FreeBSD discovery fix -- an adapter whose tty is not named
+    # yet must not be reported as '/dev/tty', or `usb off` would write
+    # SP frames at the operator's own terminal.  1.2 also bounds the walk
+    # up the sysctl tree and gives a silent line an error message.
     #
     # Pinned to the series for the reason given under ucl below -- the
     # failure mode of a quiet change here is a port switched that
@@ -91,9 +80,9 @@ Gem::Specification.new do |spec|
     spec.add_dependency 'parallel', '>= 1.28', '< 3'
     spec.add_dependency 'tty-logger'
     spec.add_dependency 'uart'        # board consoles, in `connect`
-    # ucl 0.2.0 vendors libucl 0.9.4 and builds it: no system libucl to
-    # install on the bench, and no mini_portile2 either, which 0.1.4
-    # needed.  It also carries the use-after-free and parser-leak fixes.
+    # ucl 0.2.0 vendors libucl 0.9.4 and builds it: no system libucl and
+    # no mini_portile2 to install on the bench.  It also carries the
+    # use-after-free and parser-leak fixes.
     #
     # Pinned to the 0.2 series rather than '>= 0.2': the configuration
     # layer depends on load_file handing back string keys, and a
