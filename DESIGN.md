@@ -26,13 +26,16 @@ CLI#run               resolves openocd if the command declares OPENOCD
 Command#run(argv, **opts)
       │
       ├──▸ each_device(ids) {|name, **hopts| ... }
-      │       serial : all declared ports on; boards in parallel
-      │       usb    : all declared ports on; boards in sequence
-      │       power  : one board powered at a time; bench left off
+      │       serial : the selected ports on; boards in parallel
+      │       usb    : the selected ports on; boards in sequence
+      │       power  : one board powered at a time; bench left off;
+      │                refused if a second probe console is up
       │
       ├──▸ openocd(*cmds, **hopts)       flash, reset, connect --reset
       ├──▸ Platform.usb_to_tty           connect
       │    Platform.serial_to_tty
+      ├──▸ Platform.usb_to_serial        serial
+      │    Platform.probe_consoles       serial, and every -m power
       └──▸ hub.on / hub.off / hub.state  every switch, through Hub
 ```
 
@@ -279,7 +282,8 @@ as `{ device:, serial:, usb_path: }`.  `Hub::ExSYS.open` turns that
 plus what was asked for into the one line the gem is handed:
 
 ```text
-Hub::ExSYS.open(named)    named = -d, else the configuration's `device`, else nil
+Hub::ExSYS.open(named)
+    named = -d, else the configuration's `device`, else nil
 
     named has a '/' in it?          ──yes──▸  the serial line itself,
                    │                          used as given
@@ -628,13 +632,13 @@ A backend is a subclass of `Hub` in a file under
 configuration's `hub =` line uses, and loaded on demand by
 `Hub.backend(kind)`.  What it has to answer:
 
-| Method               | Answers                                          |
-| :------------------- | :----------------------------------------------- |
-| `ports`              | every port, in order, numbered as the hub does   |
-| `state`              | `{ port => true/false }`, for every port         |
-| `on` `off` `toggle`  | switch the ports named                           |
-| `usb_path(port)`     | where a board on that port is in the USB tree    |
-| `to_s`               | the hub as a message names it                    |
+| Method              | Answers                                        |
+| :------------------ | :--------------------------------------------- |
+| `ports`             | every port, in order, numbered as the hub does |
+| `state`             | `{ port => true/false }`, for every port       |
+| `on` `off` `toggle` | switch the ports named                         |
+| `usb_path(port)`    | where a board on that port is in the USB tree  |
+| `to_s`              | the hub as a message names it                  |
 
 Two have defaults in the base class: `set` is an on and an off, which a
 backend that can apply a whole configuration in one exchange overrides,
@@ -689,24 +693,26 @@ is refused rather than ignored.
 
 The instance gets `@cli`, and delegates the whole bench vocabulary to it:
 
-| Call                      | Gives back                                     |
-| :------------------------ | :--------------------------------------------- |
-| `hub`                     | the hub object (a `Hub`; today `Hub::ExSYS`)   |
-| `tty`                     | the logger (`TTY::Logger`), or `nil`           |
-| `openocd(*cmds, **hopts)` | `true` on success; a block gets `(ok, output)` |
-| `each_device(ids, &b)`    | as above; with no block, an Enumerator         |
-| `port_list(ids)`          | names or numbers → port Integers               |
-| `devices`                 | every declared board that is on the bench      |
-| `switchable`              | the ports that may be powered down             |
-| `offable(ports, force:)`  | the vetted list, or raises                     |
-| `offable?(port, force:)`  | `true` or `false`                              |
+| Call                      | Gives back                                      |
+| :------------------------ | :---------------------------------------------- |
+| `hub`                     | the hub object: `Hub::ExSYS` or `Hub::USB`      |
+| `tty`                     | the logger (`TTY::Logger`), or `nil`            |
+| `openocd(*cmds, **hopts)` | `true` on success; a block gets `(ok, output)`  |
+| `each_device(ids, &b)`    | as above; with no block, an Enumerator          |
+| `port_list(ids)`          | names or numbers → port Integers                |
+| `devices`                 | every declared board that is on the bench       |
+| `switchable`              | the ports that may be powered down              |
+| `offable(ports, force:)`  | the vetted list, or raises                      |
+| `offable?(port, force:)`  | `true` or `false`                               |
 | `tally(id)`               | this board's tally name, from the configuration |
 
 `conf` is delegated too and is vestigial: `@conf` is never assigned, so
 it always answers `nil`.  Do not build on it.
 
 A command that reports per-device success returns `false` if any device
-failed, which `CLI.run` turns into exit status 1.
+failed, which `CLI.run` turns into exit status 1.  `connect` does the
+same for a board whose console was not found or could not be read: it
+prints `<NAME> ERROR: …` in place of that board's SUMMARY line.
 
 
 ## Invariants a change must not break
@@ -737,13 +743,23 @@ failed, which `CLI.run` turns into exit status 1.
   * **The version lives in `version.rb` alone.**  The gemspec reads it
     from there and `--version` prints the same constant, so a release
     cannot have two numbers.
+  * **A port number is decimal.**  `CLI.port_number` reads a string in
+    base 10 wherever a port is parsed — the command line, `port =`,
+    `protect.ports` — because `Integer('010')` is 8: a zero-padded port
+    once switched, and protected, the wrong socket.
+  * **`--method power` never lets openocd choose the adapter.**  It
+    powers down only what it may, so a probe on a protected or
+    undeclared port stays up; `CLI#only_probe!` refuses the run when more
+    than one probe console is present once a board is powered.
   * **A guess about which hub is never made when it could be wrong.**
     Reaching the wrong hub is undetectable after the fact — every frame
     is accepted and the boards that go dark are somebody else's — so
     two candidates is an error, not a warning and not a default.
   * **Failure is reported before the bench is disturbed.**  A missing
-    openocd, an unwritable `--debug` file and an unreadable configuration are
-    all found before a port is switched.  Finding out that a path is
+    openocd, an unwritable `--debug` file, an unreadable configuration, a
+    tally name nothing registered, a FIRMWARE that is not a readable file
+    and `connect --interactive` given more than one board are all found
+    before a port is switched.  Finding out that a path is
     unwritable after a bench has been powered down is finding out too
     late.
 

@@ -384,7 +384,8 @@ configuration guards the ports it used to know about.
 | `connect` | Open board consoles, print their lines, summarise.  |
 
 Every command takes device names or port numbers interchangeably, and
-acts on all declared devices when given neither.  Note that `serial`
+acts on every board on the bench when given neither (each declared
+device but those with `port = none`).  Note that `serial`
 prints a probe's identifying number, not console text — reading a
 board's console is `connect`.
 

@@ -838,10 +838,10 @@ There are three ways, chosen with \-m/\-\-method:
 │ method  │ addresses a     │ requires     │ power while the job    │
 │         │ board by        │              │ runs                   │
 ├─────────┼─────────────────┼──────────────┼────────────────────────┤
-│ serial  │ its debug probe │ serial= for  │ every declared port    │
+│ serial  │ its debug probe │ serial= for  │ every selected port    │
 │         │ serial number   │ every board  │ on; boards in parallel │
 ├─────────┼─────────────────┼──────────────┼────────────────────────┤
-│ usb     │ its USB path,   │ a USB path   │ every declared port    │
+│ usb     │ its USB path,   │ a USB path   │ every selected port    │
 │         │ root.bank.slot  │ for the hub  │ on; boards in sequence │
 ├─────────┼─────────────────┼──────────────┼────────────────────────┤
 │ power   │ being the only  │ nothing      │ exactly one board at   │
@@ -933,7 +933,8 @@ After any power\-on, \-W/\-\-warm\-up seconds (default 5) pass before the boards
 are touched, to let them enumerate.
 .Sh COMMANDS
 Every command takes device names or port numbers interchangeably, and
-operates on all declared devices when given neither.
+operates on every board on the bench when given neither: each declared
+device but those with port = none.
 .Bl -tag -width Ds
 .It Ic usb Cm status | on | off | toggle | set Oo Ar PORT | DEVNAME Oc ...
 Drive hub port power directly.
