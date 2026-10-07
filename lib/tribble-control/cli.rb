@@ -402,11 +402,22 @@ class CLI
         end
     end
 
+    # A port number, decimal whatever it looks like.
+    #
+    # Integer() reads a leading 0 as octal, so '010' was port 8 and
+    # '08' an ArgumentError: 'usb off 010' cut port 8, and a quoted
+    # 'protect { ports = [ "010" ] }' protected port 8 and left 10
+    # switchable.  An unquoted 010 never did this -- UCL hands back 10
+    # -- which is why only a string goes through base 10.
+    def self.port_number(v)
+        v.is_a?(String) ? Integer(v, 10) : Integer(v)
+    end
+
     # Translate a port/name to a port identier
     def name_port(id)
         case id
         when /^\d+$/
-            port = Integer(id)
+            port = Integer(id, 10)
             if (name = @entries.find {|_k,v| v.dig('port') == port }&.first)
                 [ name, port ]
             end
@@ -549,7 +560,7 @@ class CLI
         v = v.downcase if v.is_a?(String)
         return nil if PORT_NONE.include?(v)
         begin
-            Integer(v)
+            self.class.port_number(v)
         rescue TypeError, ArgumentError
             raise Error, "configuration entry '#{id}' has #{PORT_KEY} = #{v.inspect}," \
                          " which is neither a port number nor none"
@@ -584,7 +595,7 @@ class CLI
     def port_list(ids)
         ids.map {|id|
             port = case id
-                   when /^\d+$/ then Integer(id)
+                   when /^\d+$/ then Integer(id, 10)
                    else
                        if @entries.nil?
                            raise Error, "device name '#{id}' needs a configuration"
@@ -806,6 +817,7 @@ class CLI
             @tty&.info "Selectively turning on device #{name}"
             @hub.on(port)
             sleep(@opts[:'warm-up'])
+            self.only_probe!(name)
             block.call(name, interface: self.interface(name),
                              target: self.target(name),
                              transport: self.transport(name),
@@ -821,6 +833,31 @@ class CLI
 
         else raise 'unsupported flashing method'
         end
+    end
+
+    # Refuse unless the board just powered is the only probe in sight.
+    #
+    # --method power identifies a board by its being the only one
+    # powered, and passes openocd no serial.  But it powers down only
+    # what it may: a probe on a protected port, or on one the
+    # configuration does not declare, stays up, and openocd then picks
+    # between two adapters by itself -- with two CMSIS-DAP probes it
+    # silently takes one (see the 'adapter usb location' measurement in
+    # each_device).  So 'flash -m power fw.hex A1' wrote A1's firmware
+    # to whichever board that was, and reported A1 flashed.  The serial
+    # command always checked this; now every command does.  A probe
+    # that shows no CDC console is not seen, so this narrows the risk
+    # rather than closing it.
+    def only_probe!(name)
+        probes = Platform.probe_consoles.keys
+        return if probes.size <= 1
+        seen   = probes.map {|p| p.to_s[0, 12] }.join(', ')
+        raise Error, "#{probes.size} probes are powered with only" \
+                     " #{name}'s port switched on (#{seen})," \
+                     ' so --method power cannot tell which is this board.' \
+                     ' A probe on a protected or undeclared port does' \
+                     ' this: use --method serial, or --force to power' \
+                     ' those down too'
     end
 
     # The openocd binary, resolved and checked once.
@@ -998,7 +1035,7 @@ class CLI
                 # can compare against a port number.
                 @protect_ports = Array(protect[PROTECT_PORTS_KEY])
                                      .flatten.map do |p|
-                    Integer(p)
+                    self.class.port_number(p)
                 rescue ArgumentError, TypeError
                     raise Error, "#{PROTECT_KEY}.#{PROTECT_PORTS_KEY} takes" \
                                  " port numbers; '#{p}' is not one"

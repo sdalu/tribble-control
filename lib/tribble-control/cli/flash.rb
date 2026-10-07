@@ -45,6 +45,14 @@ class Flash < CLI::Command
 
     def run(argv, **opts)
         firmware = argv.shift
+        # Checked before any port is switched.  A typo used to be found
+        # by openocd, once per board -- under --method power, after the
+        # whole bench had been cut and cycled.  openocd resolves the
+        # path against the current directory, as File.file? does.
+        raise Error, 'flash: FIRMWARE missing' if firmware.nil?
+        unless File.file?(firmware) && File.readable?(firmware)
+            raise Error, "flash: no readable firmware file '#{firmware}'"
+        end
         tty&.info "Firmware: #{firmware}"
 
         each_device(argv).map do |name, hopts={}|

@@ -59,7 +59,7 @@ class TestSwitch < Minitest::Test
         cli = cli_with_link_hub('-W', '0', command: 'flash')
         cli.stub(:openocd, true) do
             ok = TribbleControl::CLI::Flash.new(cli)
-                                           .run([ 'fw.hex', 'A1' ],
+                                           .run([ __FILE__, 'A1' ],
                                                 :'power-cycle' => true,
                                                 :method => 'serial',
                                                 :'warm-up' => 0, :force => false)

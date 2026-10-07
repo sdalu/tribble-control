@@ -134,6 +134,14 @@ class Connect < CLI::Command
         # in its own words, before a counter is ever asked for.
         counters = opts.include?(:config) ? tallies(argv, opts[:tally]) : {}
 
+        # Before anything is powered, reset or started: this used to be
+        # found only once every reader was running.
+        if opts[:interactive] && opts.include?(:config) && counters.size != 1
+            raise Error, 'connect: --interactive takes a single device' \
+                         " (#{counters.size} selected)"
+        end
+        @failed = []
+
         if opts[:off]
             off_ports = offable(force: opts[:force])
             tty&.info "Starting from off state: #{off_ports.join(' ')}"
@@ -158,6 +166,7 @@ class Connect < CLI::Command
             where = hopts[:usb] || "probe #{hopts[:serial] || '(no serial)'}"
             tty&.error "Device #{name}: no console enumerated at" \
                        " #{where}; not capturing it"
+            @failed << name
             next
           end
           tty&.info "Connecting to #{name} on #{dev_tty}"
@@ -171,21 +180,7 @@ class Connect < CLI::Command
             # end, for one summary.  See #tallies, TribbleControl::Tally,
             # and --require.
             counter = counters.fetch(name)
-            Thread.new do
-                UART.open dev_tty, @cli.baud(name) do |serial|
-                    loop do
-                      line = serial.readline
-                      counter << line
-                      puts "<#{name}> #{line}"
-                    rescue EOFError
-                        retry
-                    end
-                end
-            ensure
-              if (summary = counter.summary)
-                  puts "<#{name}> SUMMARY: #{summary}"
-              end
-            end
+            Thread.new { read_console(name, dev_tty, counter) }
         end
 
         # A board that is already running has usually said everything it
@@ -234,6 +229,39 @@ class Connect < CLI::Command
         else
             sleep(opts[:duration] || 600)
         end
+
+        # A board that was never read is not a quiet board: exit 1.
+        @failed.empty?
+    end
+
+    # Read one board's console until the run ends, and say how it went.
+    #
+    # The SUMMARY used to come from an ensure, whatever ended the
+    # thread: a console that would not open (permission, busy, gone) or
+    # a read that failed on unplug, or a tally that raised, left
+    # '<A1> SUMMARY: lines=0' on stdout and a thread trace on stderr --
+    # a board that was never read, reported as one that said nothing.
+    # Now it says ERROR on stdout, where a capture keeps it, gives no
+    # SUMMARY, and the run exits 1.
+    def read_console(name, dev_tty, counter)
+        failed = false
+        UART.open dev_tty, @cli.baud(name) do |serial|
+            loop do
+              line = serial.readline
+              counter << line
+              puts "<#{name}> #{line}"
+            rescue EOFError
+                retry
+            end
+        end
+    rescue StandardError => e
+        failed = true
+        (@failed ||= []) << name
+        puts "<#{name}> ERROR: #{e.message} (#{e.class}); not read past this point"
+    ensure
+        if !failed && (summary = counter.summary)
+            puts "<#{name}> SUMMARY: #{summary}"
+        end
     end
 
     # Stdin to the board, a line at a time.
@@ -251,9 +279,9 @@ class Connect < CLI::Command
     # of the connection does the editing and the echo, so what arrives
     # is already the line that was meant.
     def interact(connected)
-        unless connected.size == 1
-            raise Error, 'connect: --interactive takes a single device'
-        end
+        # One device was selected (run checked); none here means its
+        # console did not enumerate, which run has already reported.
+        raise Error, 'connect: no console to type at' if connected.empty?
         name, hopts = connected.first
         dev_tty = console(hopts)
         tty&.info "Typing at #{name} (^D to leave)"

@@ -417,7 +417,9 @@ board by being the only one powered.  It costs a power cycle per board
 and **leaves the bench powered off** when it finishes — every declared
 board whose port may be switched, that is; one the configuration
 protects stays powered and says so.  Run `usb on` afterwards to bring
-the bench back up.
+the bench back up.  A probe left powered on such a port would be a
+second adapter in front of openocd, so a run that finds more than one
+probe console once a board is up is refused.
 
 
 ## Reading a console
