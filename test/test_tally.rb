@@ -157,4 +157,22 @@ class TestTally < Minitest::Test
         assert_match(/unknown tally 'twr'/, refusal('--tally', 'twr'))
         assert_match(/unknown tally 'twr'/, refusal('--tally', 'A3=twr'))
     end
+
+    # -r given twice loads both, as a comma list does: a second -r that
+    # replaced the first would surface only as an unknown tally.
+    def test_every_require_is_loaded
+        dir      = Dir.mktmpdir('tribble-test')
+        @tmpdirs = (@tmpdirs || []) << dir
+        files    = %w[ra rb].map {|n|
+            File.join(dir, "#{n}.rb").tap {|f|
+                File.write(f, "TribbleControl::Tally.register(:#{n}) {|d| d }\n")
+            }
+        }
+        cli_for('', '-r', files[0], '-r', files[1])
+        assert_equal %w[ra rb], %w[ra rb] & TribbleControl::Tally.registered
+    ensure
+        %w[ra rb].each {|n|
+            TribbleControl::Tally.instance_variable_get(:@registry).delete(n)
+        }
+    end
 end

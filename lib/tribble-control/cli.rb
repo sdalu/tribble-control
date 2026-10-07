@@ -234,7 +234,7 @@ class CLI
         opts.on       '--openocd=PATH',    'openocd path'
         opts.on '-r', '--require=FILE', Array,
                 'Ruby file(s) to load first, for the tallies',
-                '  they register (comma-separated)'
+                '  they register (comma-separated, repeatable)'
         opts.on '-F', '--force',           'Switch protected ports too'
         opts.on       '--debug[=FILE]', 'Show debug output, and copy',
                                        'the whole log to FILE if given'
@@ -874,7 +874,10 @@ class CLI
         opts = {}.merge(Defaults)
 
         # Parse global options
-        GlobalParser.order!(argv, into: opts)
+        # -r given twice loads both files: it is how each tally reaches
+        # the tool, and a second -r that silently dropped the first would
+        # surface only as an unknown tally, far from its cause.
+        GlobalParser.order!(argv, into: Accumulator.new(opts, [ :require ]))
 
         # Before anything else: a tally the configuration names has to be
         # registered by the time the configuration is read, and a file that

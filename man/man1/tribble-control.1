@@ -378,6 +378,9 @@ ignored.
 .It Fl r , Fl -require Ns = Ns Ar FILE Ns Op , Ns Ar FILE ...
 Ruby files to load before anything else runs, for the tallies they
 register.
+Repeatable: every
+.Fl r
+given is loaded, in order.
 See
 .Sx TALLIES .
 .It Fl -openocd Ns = Ns Ar PATH
