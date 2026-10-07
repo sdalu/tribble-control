@@ -531,7 +531,15 @@ end
 
 `tally =` at the top of the configuration sets the bench's default and
 `tally =` inside a device entry overrides it for that board, so one
-capture can read two firmwares.  The block is called once per board per
+capture can read two firmwares.  `connect --tally NAME` and
+`--tally DEV=NAME` override both for one run: the configuration describes
+boards, and the same board carries different firmware from one campaign
+to the next, so what is flashed is the run's to say.  `Connect#tallies`
+resolves and builds every board's tally before `--off` or any port is
+switched, so a bad name stops the run before it has done anything; the
+option is repeatable because `Connect::Repeatable` lists it, which makes
+`CLI#parse` store into a `CLI::Accumulator` that appends where
+OptionParser's `into:` would overwrite.  The block is called once per board per
 run, so a tally may keep whatever state it likes without sharing it.
 What it returns must answer two messages:
 
@@ -692,7 +700,7 @@ The instance gets `@cli`, and delegates the whole bench vocabulary to it:
 | `switchable`              | the ports that may be powered down             |
 | `offable(ports, force:)`  | the vetted list, or raises                     |
 | `offable?(port, force:)`  | `true` or `false`                              |
-| `tally(id)`               | this board's tally name                        |
+| `tally(id)`               | this board's tally name, from the configuration |
 
 `conf` is delegated too and is vestigial: `@conf` is never assigned, so
 it always answers `nil`.  Do not build on it.

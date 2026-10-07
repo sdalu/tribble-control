@@ -14,6 +14,7 @@ class Connect < CLI::Command
     # to address the board for flashing.
     Methods  = [ 'usb', 'serial' ]
     Defaults = {}
+    Repeatable = [ :tally ]
     Parser   = OptionParser.new do |opts|
         # Usage
         opts.banner = "Usage: #{PROGNAME} connect [options] PORT"
@@ -35,6 +36,72 @@ class Connect < CLI::Command
         opts.on '--interactive', 'Type at the board: forward this' \
                                  ' standard input to it, and stay until' \
                                  ' end of input rather than for a duration'
+        # NAME, not [DEV=]NAME: OptionParser reads brackets after the
+        # '=' as an optional argument, which '--tally twr' never fills.
+        opts.on '--tally=NAME', Array,
+                'Read the consoles with tally NAME for this run,' \
+                ' whatever the configuration says; DEV=NAME for one' \
+                ' board only (repeatable, comma-separated)'
+    end
+
+    # Each selected board's tally, built: { name => tally }.
+    #
+    # +given+ is what --tally said, in order.  A bare NAME is the run's
+    # tally, DEV=NAME is one board's; the configuration answers for
+    # whatever neither names.  So, for one board, the first of: DEV=NAME,
+    # NAME, the board's own tally key (or its type's), the file's, lines.
+    #
+    # Built here, all of them, before anything is switched: an unknown
+    # name found once --off had cut the bench, or once the first board's
+    # reader was already running, is a failure that has already done
+    # something.  A board later skipped for having no console has been
+    # built for nothing, which costs a block call.
+    #
+    # The bench changes firmware from one campaign to the next on the
+    # same boards, and the configuration is about boards, not about what
+    # is flashed on them -- which is why the run, not the file, gets the
+    # last word.
+    def tallies(ids, given)
+        names   = (ids.empty? ? devices : ids).map {|id| name_of(id) }
+        run     = nil
+        boards  = {}
+
+        Array(given).each do |spec|
+            dev, eq, which = spec.rpartition('=')
+            if eq.empty?
+                if run && run != which
+                    raise Error, "--tally gives two tallies for the run" \
+                                 " (#{run}, #{which}): use DEV=NAME for" \
+                                 ' one board'
+                end
+                run = which
+                next
+            end
+            if dev.empty? || which.empty?
+                raise Error, "--tally #{spec}: expected NAME or DEV=NAME"
+            end
+            name = name_of(dev)
+            unless names.include?(name)
+                raise Error, "--tally #{spec}: #{name} is not captured by" \
+                             " this run (#{names.join(' ')})"
+            end
+            if boards[name] && boards[name] != which
+                raise Error, "--tally gives #{name} two tallies" \
+                             " (#{boards[name]}, #{which})"
+            end
+            boards[name] = which
+        end
+
+        names.to_h {|n| [ n, Tally.build(boards[n] || run || tally(n), n) ] }
+    end
+
+    # A device name, from a name or a port number as the command line
+    # takes them.  An id the configuration does not know is the user's
+    # error, said as one, not a KeyError.
+    def name_of(id)
+        @cli.name_port(id).first
+    rescue KeyError
+        raise Error, "no device '#{id}' in the configuration"
     end
 
     # Where this board's console is.
@@ -54,6 +121,10 @@ class Connect < CLI::Command
     end
 
     def run(argv, **opts)
+        # No configuration, no boards to name: each_device says so below,
+        # in its own words, before a counter is ever asked for.
+        counters = opts.include?(:config) ? tallies(argv, opts[:tally]) : {}
+
         if opts[:off]
             off_ports = offable(force: opts[:force])
             tty&.info "Starting from off state: #{off_ports.join(' ')}"
@@ -86,10 +157,11 @@ class Connect < CLI::Command
             # What the lines MEAN is not this tool's business: the
             # strings worth counting belong to whatever firmware
             # happens to be on the bench this month, and they change
-            # without a hub changing.  The tally named by the configuration
-            # is handed every line and asked, at the end, for one
-            # summary.  See TribbleControl::Tally, and --require.
-            counter = Tally.build(tally(name), name)
+            # without a hub changing.  The tally --tally or the
+            # configuration names is handed every line and asked, at the
+            # end, for one summary.  See #tallies, TribbleControl::Tally,
+            # and --require.
+            counter = counters.fetch(name)
             Thread.new do
                 UART.open dev_tty, @cli.baud(name) do |serial|
                     loop do

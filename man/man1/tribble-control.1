@@ -1,4 +1,4 @@
-.Dd September 18, 2026
+.Dd October 7, 2026
 .Dt TRIBBLE-CONTROL 1
 .Os
 .Sh NAME
@@ -1065,6 +1065,12 @@ It is meant to be run through a terminal \(em 'bench connect' opens it
 over ssh \-t, which is what supplies the editing and the echo of the
 line being typed; a pipe works too, and sends what it is given.
 .Pp
+\-\-tally=NAME reads every selected board's console with tally NAME
+for this run, whatever the configuration says; \-\-tally=DEV=NAME does
+so for board DEV alone.
+See
+.Sx TALLIES .
+.Pp
 Selection methods: usb (default), serial.
 Exit status:
 0, or 1 on error; nothing about what the boards did.
@@ -1125,6 +1131,32 @@ tally = twr                     # every board on this bench
 D4 { port = 7, tally = lines }  # except this one
 .Ed
 .Pp
+The configuration is about boards, not about what is flashed on them,
+so a run can override it.
+.Ic connect Fl \-tally Ns = Ns Ar NAME
+reads every selected board with NAME, and
+.Fl \-tally Ns = Ns Ar DEV Ns = Ns Ar NAME
+reads board DEV with NAME; DEV is a device name or a port number, as on
+the command line.
+The option may be repeated, or given a comma\-separated list, and every
+value counts:
+.Bd -literal
+connect \-\-tally twr \-\-tally D4=none     # D4 runs the probe firmware
+connect \-\-tally twr,D4=none             # the same
+.Ed
+.Pp
+For each board the first that applies wins: its DEV=NAME, the run's
+NAME, its own
+.Cm tally
+key (or its type's), the file's
+.Cm tally ,
+then
+.Cm lines .
+Two run\-wide names, two names for one board, or a DEV the run does not
+capture are refused rather than resolved by order.
+.Pp
+Every board's tally is built before a port is switched, so a name
+nothing has registered stops the run before \-\-off cuts the bench.
 A name nothing has registered is an error, not a silent fall back to
 counting lines: a configuration asking for twr on a run that forgot
 .Fl r

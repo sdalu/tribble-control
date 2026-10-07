@@ -418,8 +418,16 @@ line.
 Two tallies ship: `lines` counts lines, and `none` writes no summary at
 all.  Anything that knows a firmware's strings is a block registered by
 a Ruby file named with `-r`/`--require` and chosen with `tally =` in
-the configuration, for the whole bench or for one board.  See DESIGN.md and
-the manual's TALLIES section.
+the configuration, for the whole bench or for one board.  A run can
+override the configuration with `connect --tally NAME` for every board it
+captures, or `--tally DEV=NAME` for one, which is how a board reflashed
+with other firmware is read without editing the file:
+
+```sh
+tribble-control -C tribble.conf -r twr-tally.rb connect --tally twr --tally D4=none
+```
+
+See DESIGN.md and the manual's TALLIES section.
 
 
 ## The manual

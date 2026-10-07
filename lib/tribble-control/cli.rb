@@ -21,6 +21,28 @@ class CLI
     class Error < StandardError
     end
 
+    # Where a command's options are stored, for a command whose options
+    # may be given more than once.
+    #
+    # OptionParser's into: assigns, so an option given twice keeps only
+    # the second.  For the keys a command lists in Repeatable, the values
+    # are added to the ones already there instead: '--tally twr --tally
+    # A3=none' means both, and dropping the first would change which
+    # tally every other board gets without a word.
+    class Accumulator
+        def initialize(opts, keys)
+            @opts = opts
+            @keys = keys
+        end
+
+        def []=(key, value)
+            @opts[key] = if @keys.include?(key)
+                         then Array(@opts[key]) + Array(value)
+                         else value
+                         end
+        end
+    end
+
     # Command class inheritance
     class Command
         extend Forwardable
@@ -879,7 +901,11 @@ class CLI
             opts.merge!(cmdk::Defaults) {|_k, o, _n| o }
         end
         if cmdk.const_defined?(:Parser)
-            cmdk::Parser.order!(argv, into: opts)
+            into = if cmdk.const_defined?(:Repeatable)
+                   then Accumulator.new(opts, cmdk::Repeatable)
+                   else opts
+                   end
+            cmdk::Parser.order!(argv, into: into)
         end
 
         if cmdk.const_defined?(:Methods)
