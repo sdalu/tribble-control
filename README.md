@@ -69,6 +69,15 @@ openocd to reach a board.
     thing FreeBSD cannot do is see a device that no driver claimed,
     there being no node for it at all.  A probe that enumerates and
     attaches nothing is invisible there rather than serial-less.
+
+    One step has never run on real hardware: on FreeBSD, placing an
+    ExSYS hub's sockets in the USB tree, which `--method usb` (`connect`,
+    `serial`) builds a board's path from.  It is derived from where the
+    hub's FT232 control line sits, and has only been tested against a
+    recorded sysctl tree; on Linux the same geometry was checked against a
+    live hub.  Its failure would be a console opened on the wrong board,
+    so the first time on a FreeBSD host with an ExSYS hub, check that
+    `connect` names the board you expect, or use `--method serial`.
   * **For `hub = usb`: FreeBSD, and membership of group `operator`.**
     That hub is switched with `usbconfig` hub-class requests, which is
     FreeBSD's command — Linux has none that issues an arbitrary control
@@ -85,9 +94,14 @@ Install it on the hub host as a gem, which brings the Ruby
 dependencies with it and needs nothing else:
 
 ```sh
+gem install tribble-control              # a release, from rubygems.org
 rake install                             # from a checkout
-gem install pkg/tribble-control-*.gem    # from `rake build`
 ```
+
+A release is what to install anywhere results are recorded: its version
+names exactly one tree.  A checkout built with `rake install` carries
+the number of the last release whatever has been committed since, so
+`tribble-control --version` cannot tell the two apart.
 
 Or, on a host that should not gain gems system-wide, deploy the
 checkout and vendor the bundle beside it:

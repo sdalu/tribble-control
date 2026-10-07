@@ -841,12 +841,15 @@ linter at zero is a gate; at several hundred it is a wall nobody reads.
   * The manifest keeps the page at `man/man1/` inside the gem, which
     makes the gem's `man/` a usable `MANPATH` entry with nothing copied
     anywhere.  See `rake man:install`.
-  * `allowed_push_host` is `none`.  This gem drives a bench; it is
-    installed from a checkout, not fetched, and `gem push` on it would
-    be an accident.  `rake release` therefore ends after the tag is
-    pushed: bundler's last step, the gem push, is replaced in the
-    Rakefile by a line saying so, because RubyGems handed a host that
-    is not a URL dies rather than refuses.
+  * `allowed_push_host` is `https://rubygems.org`, with MFA required.
+    It was `none` while the gem drove one bench and was installed from a
+    checkout; that let a checkout build unreleased code under the last
+    release's number, which a version fetched from a registry cannot.
+    `rake release` is bundler's own: tag, push, publish.  A published
+    version cannot be taken back, only yanked, and its number is spent.
+  * Runtime dependencies are bounded (`~>`, or `>= … < …` for
+    `parallel`): a quiet change in any of them is a port switched that
+    should not be, or a failed flash reported as success.
   * `Gemfile.lock` is not committed.  This is a library, and the bench
     installs the built gem rather than a vendored bundle, so nothing
     reads a lock.

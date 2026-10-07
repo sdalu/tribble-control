@@ -6,23 +6,32 @@ Gem::Specification.new do |spec|
     spec.authors     = [ "Stephane D'Alu" ]
     spec.email       = [ 'sdalu@sdalu.com' ]
 
-    spec.summary     = 'Power, flash and monitor the devices plugged' \
-                       ' into an ExSYS 16-port managed USB hub'
+    spec.summary     = 'Power, flash and monitor the boards plugged' \
+                       ' into a switchable USB hub'
     spec.description = <<~DESC
-        Drives the FT232 control line of an ExSYS 16-port managed USB
-        hub, and for the nRF52 boards on it speaks SWD through
-        openocd/CMSIS-DAP and reads their console over USB CDC.  Which
-        board sits on which port -- and which ports must never lose
-        power -- is read from a device list, so the tool switches the
-        bench it is told about and nothing else.
+        Switches the ports of a USB hub -- an ExSYS 16-port managed hub
+        over its internal FT232 line, or any hub that switches its own
+        ports, through hub-class requests (FreeBSD for now) -- and for
+        the boards on it speaks SWD through openocd and reads their
+        consoles over USB CDC.  Which board sits on which port, and
+        which ports must never lose power, is read from a
+        configuration, so the tool switches the bench it is told about
+        and nothing else.  What a console's lines mean is left to a
+        tally loaded at run time.
     DESC
 
     spec.license     = 'MIT'
     spec.homepage    = 'https://github.com/sdalu/tribble-control'
 
-    # This gem drives one bench.  It is installed from a checkout, not
-    # fetched, and `gem push` on it would be an accident.
-    spec.metadata['allowed_push_host'] = 'none'
+    # Published on rubygems.org, and only there.  It used to be 'none':
+    # the gem drove one bench and was installed from a checkout.  That
+    # let a checkout build unreleased code under the last release's
+    # number -- 0.3.0 did it for a day -- which an exact version fetched
+    # from a registry cannot.  The cost is that a release cannot be
+    # taken back: a bad one is yanked, and its number is spent.
+    spec.metadata['allowed_push_host'] = 'https://rubygems.org'
+    spec.metadata['source_code_uri']   = spec.homepage
+    spec.metadata['rubygems_mfa_required'] = 'true'
 
     # Class#subclasses, which is how commands are discovered.
     spec.required_ruby_version = '>= 3.1'
@@ -74,7 +83,12 @@ Gem::Specification.new do |spec|
     # should not be.
     spec.add_dependency 'exsys', '~> 1.2'   # the hub, over its FT232 line,
                                             #   and finding it on the host
-    spec.add_dependency 'parallel'    # one openocd per board at a time
+    # One openocd per board at a time, in threads (see each_device).
+    # Bounded like the others: 1.28 and 2.3 are the two the suite has
+    # run against, 1.x on the workstation and 2.x in the bench's bundle,
+    # and a 3.0 that changed what in_threads hands back would change
+    # what flash and reset report.
+    spec.add_dependency 'parallel', '>= 1.28', '< 3'
     spec.add_dependency 'tty-logger'
     spec.add_dependency 'uart'        # board consoles, in `connect`
     # ucl 0.2.0 vendors libucl 0.9.4 and builds it: no system libucl to
